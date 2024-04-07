@@ -1682,3 +1682,204 @@ FAIL
 ```
 I would like to see only if a new file is created and ignore all the rest of the output.
 Probably applying some filterring or checking with diff before and after running the code or in some other way. How can we do that?
+
+**Assistant:**
+
+To focus on checking if a new file is created and ignore the rest of the output, we can modify the `Execute` function to list the files in the `/sandbox` directory before and after running the code. Then, we can compare the file lists to determine if a new file was created.
+
+Here's how we can update the `Execute` function in the `internal/executor/docker.go` file:
+
+```go
+func (e *DockerExecutor) Execute(code, language string) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd: []string{"sh", "-c", "mkdir -p /sandbox && ls -1 /sandbox > /sandbox/before.txt && echo $'" + strings.ReplaceAll(code, "'", "\\'") + "' > /sandbox/code." + getFileExtensionForLanguage(language) +
+			" && " + getRunCommandForLanguage(language, "/sandbox/code."+getFileExtensionForLanguage(language)) +
+			" && ls -1 /sandbox > /sandbox/after.txt && echo 'New files:' && diff -u /sandbox/before.txt /sandbox/after.txt | grep '^+' | cut -c2-"},
+		WorkingDir: "/sandbox",
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   128 * 1024 * 1024, // 128MB
+			CPUQuota: 50000,             // 50% CPU
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+}
+```
+
+In the updated `Execute` function, we made the following changes:
+
+1. We added `ls -1 /sandbox > /sandbox/before.txt` to the `Cmd` field to list the files in the `/sandbox` directory before running the code and save the list to a file named `before.txt`.
+2. We added `ls -1 /sandbox > /sandbox/after.txt` to the `Cmd` field to list the files in the `/sandbox` directory after running the code and save the list to a file named `after.txt`.
+3. We added `echo 'New files:' && diff -u /sandbox/before.txt /sandbox/after.txt | grep '^+' | cut -c2-` to the `Cmd` field to compare the `before.txt` and `after.txt` files, extract the lines starting with `+` (indicating new files), and remove the leading `+` character.
+
+Now, let's update the test case in the `TestDockerExecutor` function in the `tests/executor_test.go` file:
+
+```go
+func TestDockerExecutor(t *testing.T) {
+	// ...
+
+	// Test case 4: Create a file
+	t.Run("CreateFile", func(t *testing.T) {
+		code := `
+with open("/sandbox/output.txt", "w") as file:
+    file.write("Hello, File!")
+
+print("File created.")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "New files:\noutput.txt"
+		if !strings.Contains(result, expected) {
+			t.Errorf("Expected output to contain: %s, but got: %s", expected, result)
+		}
+	})
+
+	// ...
+}
+```
+
+In the updated test case, we changed the expected output to `"New files:\noutput.txt"`, which indicates that a new file named `output.txt` was created.
+
+Please update the `Execute` function and the test case in your code and run the tests again. Verify that all test cases pass with the new file comparison approach.
+
+Let me know if you have any further questions or if you'd like to add more test cases to cover different scenarios.
+
+**User:**
+
+Thank you, but I decided to dump any of this logic and to not do any of this.
+My current code looks like this:
+```go
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"sh", "-c", "echo $'" + strings.ReplaceAll(code, "'", "\\'") + "' > code." + getFileExtensionForLanguage(language) + " && " + getRunCommandForLanguage(language, "code."+getFileExtensionForLanguage(language))},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   128 * 1024 * 1024, // 128MB
+			CPUQuota: 50000,             // 50% CPU
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+```
+
+I also remove the 4th test case because I don't need it anymore.
+I would like you to implement another test that actually give execution timelimite and the program exceeds it because of some sleep command or something like that. How can we do that?
+
+**Assistant:**
+
+Certainly! To test the execution time limit and ensure that the program terminates when it exceeds the specified limit, we can modify the `Execute` function to accept a timeout duration and use it to set a timeout for the container execution. Then, we can create a test case where the program sleeps for longer than the allowed timeout.
+
+Here's how you can update the `Execute` function in the `internal/executor/docker.go` file:
+
+```go
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"sh", "-c", "echo $'" + strings.ReplaceAll(code, "'", "\\'") + "' > code." + getFileExtensionForLanguage(language) + " && " + getRunCommandForLanguage(language, "code."+getFileExtensionForLanguage(language))},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   128 * 1024 * 1024, // 128MB
+			CPUQuota: 50000,             // 50% CPU
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+
+	// Wait for the container to finish or timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return "", fmt.Errorf("failed to wait for container: %v", err)
+		}
+	case <-statusCh:
+	case <-ctx.Done():
+		return "", fmt.Errorf("container execution timed out after %s", timeout)
+	}
+
+	// ...
+}
+```
+
+In the updated `Execute` function, we made the following changes:
+
+1. We added a new parameter `timeout` of type `time.Duration` to specify the execution time limit.
+2. We created a new context with a timeout using `context.WithTimeout(ctx, timeout)` and deferred the cancellation of the context.
+3. We modified the `select` statement to include a case for `<-ctx.Done()`, which will be triggered if the timeout is reached. In that case, we return an error indicating that the container execution timed out.
+
+Now, let's add a new test case to the `TestDockerExecutor` function in the `tests/executor_test.go` file:
+
+```go
+func TestDockerExecutor(t *testing.T) {
+	// ...
+
+	// Test case 4: Execution timeout
+	t.Run("ExecutionTimeout", func(t *testing.T) {
+		code := `
+import time
+
+print("Starting execution")
+time.sleep(5)
+print("Execution finished")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		timeout := 2 * time.Second
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected an execution timeout error, but got nil")
+		} else if !strings.Contains(err.Error(), "container execution timed out") {
+			t.Errorf("Expected a timeout error, but got: %v", err)
+		}
+	})
+
+	// ...
+}
+```
+
+In the new test case `ExecutionTimeout`, we provide a Python code snippet that prints a message, sleeps for 5 seconds, and then prints another message. We set the timeout to 2 seconds using `timeout := 2 * time.Second`.
+
+We expect the `Execute` function to return an error indicating that the container execution timed out after 2 seconds. We check for the presence of the "container execution timed out" error message in the returned error.
+
+Please update the `Execute` function and add the new test case to your code. Run the tests again and verify that all test cases pass, including the new `ExecutionTimeout` test case.
+
+Let me know if you have any further questions or if you'd like to add more test cases to cover different scenarios.
+
+**User:**
+
+Thank you! I needed to add to all other tests the timeout parameter as well. Now everything works as expected.

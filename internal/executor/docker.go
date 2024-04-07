@@ -23,7 +23,7 @@ func NewDockerExecutor() (*DockerExecutor, error) {
 	return &DockerExecutor{client: cli}, nil
 }
 
-func (e *DockerExecutor) Execute(code, language string) (string, error) {
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
 	// Perform syntax check
 	if err := e.syntaxCheck(code, language); err != nil {
 		return "", fmt.Errorf("syntax check failed: %v", err)
@@ -51,6 +51,9 @@ func (e *DockerExecutor) Execute(code, language string) (string, error) {
 	}
 
 	// Wait for the container to finish or timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
 	select {
 	case err := <-errCh:
@@ -58,8 +61,8 @@ func (e *DockerExecutor) Execute(code, language string) (string, error) {
 			return "", fmt.Errorf("failed to wait for container: %v", err)
 		}
 	case <-statusCh:
-	case <-time.After(10 * time.Second):
-		return "", fmt.Errorf("container execution timed out")
+	case <-ctx.Done():
+		return "", fmt.Errorf("container execution timed out after %s", timeout)
 	}
 
 	// Retrieve the container logs
