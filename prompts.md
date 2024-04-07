@@ -1295,3 +1295,390 @@ With this change, the tests should pass without any issues.
 Please run the tests again and let me know if you have any further questions or concerns.
 
 **User:**
+
+Thank you, this worked perfect! Now let's add some test that prints something but also returns a value at the end of execution. I would like to test the following code:
+```python
+def add(a, b):
+	return a + b
+a = add(2, 3)
+print(a)
+a
+```
+
+**Assistant:**
+
+Great! Let's add a new test case to cover the scenario where the code prints something and also returns a value at the end of the execution.
+
+Update the `TestDockerExecutor` function in the `tests/executor_test.go` file to include the new test case:
+
+```go
+func TestDockerExecutor(t *testing.T) {
+	// Test case 1: Successful execution
+	t.Run("SuccessfulExecution", func(t *testing.T) {
+		code := "print('Hello, World!')"
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "Hello, World!"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Test case 2: Syntax error
+	t.Run("SyntaxError", func(t *testing.T) {
+		code := "print('Hello, World!"
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language)
+		if err == nil {
+			t.Error("Expected a syntax error, but got nil")
+		}
+	})
+
+	// Test case 3: Print and return value
+	t.Run("PrintAndReturnValue", func(t *testing.T) {
+		code := `
+def add(a, b):
+    return a + b
+
+a = add(2, 3)
+print(a)
+a
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "5"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Add more test cases for different scenarios
+}
+```
+
+In the new test case `PrintAndReturnValue`, we provide a code snippet that defines a function `add`, calls it with arguments `2` and `3`, prints the result, and then returns the value of `a` at the end.
+
+The expected output is `"5"` because the `add` function returns the sum of `2` and `3`, which is `5`. The `print` statement will output `5` to the console, but the returned value at the end of the code is also `5`.
+
+Please run the tests again and verify that all test cases pass, including the new `PrintAndReturnValue` test case.
+
+Let me know if you have any further questions or if you'd like to add more test cases to cover different scenarios.
+
+**User:**
+
+Now let's add another one in which python program creates a file and writes to it. I would like to see output of that the file was created and written to. How can we do that?
+
+**Assistant:**
+
+To test a Python program that creates a file and writes to it, we need to modify the `Execute` function to capture the file contents and include them in the output. We'll also add a new test case to verify this functionality.
+
+First, let's update the `Execute` function in the `internal/executor/docker.go` file:
+
+```go
+func (e *DockerExecutor) Execute(code, language string) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd: []string{"sh", "-c", "echo $'" + strings.ReplaceAll(code, "'", "\\'") + "' > code." + getFileExtensionForLanguage(language) +
+			" && " + getRunCommandForLanguage(language, "code."+getFileExtensionForLanguage(language)) +
+			" && cat /app/output.txt"},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   128 * 1024 * 1024, // 128MB
+			CPUQuota: 50000,             // 50% CPU
+		},
+		Binds: []string{"/tmp:/app"},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+}
+```
+
+In the updated `Execute` function, we made two changes:
+
+1. We added `&& cat /app/output.txt` to the `Cmd` field to read the contents of the file created by the Python program.
+2. We added `Binds: []string{"/tmp:/app"}` to the `HostConfig` to mount the `/tmp` directory of the host machine to the `/app` directory inside the container. This allows the Python program to write files to the `/app` directory, which will be accessible from the host machine.
+
+Next, let's add a new test case to the `TestDockerExecutor` function in the `tests/executor_test.go` file:
+
+```go
+func TestDockerExecutor(t *testing.T) {
+	// ...
+
+	// Test case 4: Create and write to a file
+	t.Run("CreateAndWriteToFile", func(t *testing.T) {
+		code := `
+with open("/app/output.txt", "w") as file:
+    file.write("Hello, File!")
+
+print("File created and written to.")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "File created and written to.\nHello, File!"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// ...
+}
+```
+
+In the new test case `CreateAndWriteToFile`, we provide a Python code snippet that opens a file at `/app/output.txt`, writes the string `"Hello, File!"` to it, and then prints a message indicating that the file was created and written to.
+
+The expected output includes both the printed message and the contents of the file, which should be `"Hello, File!"`.
+
+Please run the tests again and verify that all test cases pass, including the new `CreateAndWriteToFile` test case.
+
+Let me know if you have any further questions or if you'd like to add more test cases to cover different scenarios.
+
+**User:**
+
+Thank you, but I don't want to see the entire content of the writing to the file. I want to see only that file being created and what is the name of the file/path to where it is in the sandbox. How can we do that? Give me test for that and I will replace it in the code with my current test.
+
+**Assistant:**
+
+Certainly! To test that a file is created by the Python program and see the file name and path within the sandbox, we can modify the `Execute` function to list the files in the `/app` directory after running the code. We'll update the test case accordingly.
+
+First, let's update the `Execute` function in the `internal/executor/docker.go` file:
+
+```go
+func (e *DockerExecutor) Execute(code, language string) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd: []string{"sh", "-c", "echo $'" + strings.ReplaceAll(code, "'", "\\'") + "' > code." + getFileExtensionForLanguage(language) +
+			" && " + getRunCommandForLanguage(language, "code."+getFileExtensionForLanguage(language)) +
+			" && ls -l /app"},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   128 * 1024 * 1024, // 128MB
+			CPUQuota: 50000,             // 50% CPU
+		},
+		Binds: []string{"/tmp:/app"},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+}
+```
+
+In the updated `Execute` function, we changed the `Cmd` field to include `&& ls -l /app` instead of `&& cat /app/output.txt`. This command lists the files in the `/app` directory along with their details.
+
+Now, let's update the test case in the `TestDockerExecutor` function in the `tests/executor_test.go` file:
+
+```go
+func TestDockerExecutor(t *testing.T) {
+	// ...
+
+	// Test case 4: Create a file
+	t.Run("CreateFile", func(t *testing.T) {
+		code := `
+with open("/app/output.txt", "w") as file:
+    file.write("Hello, File!")
+
+print("File created.")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "File created.\n-rw-r--r-- 1 root root 12 Jun  4 12:34 /app/output.txt"
+		if !strings.Contains(result, expected) {
+			t.Errorf("Expected output to contain: %s, but got: %s", expected, result)
+		}
+	})
+
+	// ...
+}
+```
+
+In the updated test case `CreateFile`, we provide a Python code snippet that opens a file at `/app/output.txt`, writes the string `"Hello, File!"` to it, and then prints a message indicating that the file was created.
+
+The expected output includes the printed message and the file details in the format `-rw-r--r-- 1 root root 12 Jun  4 12:34 /app/output.txt`. Note that the timestamp and file size may vary depending on when the test is run.
+
+We use `strings.Contains(result, expected)` to check if the expected output is contained within the actual result.
+
+Please replace the previous test case with this updated one and run the tests again. Verify that all test cases pass, including the new `CreateFile` test case.
+
+Let me know if you have any further questions or if you'd like to add more test cases to cover different scenarios.
+
+**User:**
+
+Okay, now we have all tests failing because we have all this info from the tmp directory. I would like to not have this and instead to have dedicated directory in the container for running the code. Something like `/sandbox`. How can we do that?
+
+**Assistant:**
+
+To use a dedicated directory in the container for running the code, such as `/sandbox`, we need to modify the `Execute` function to create the directory and mount it appropriately. We'll also update the test cases to use the `/sandbox` directory instead of `/app`.
+
+First, let's update the `Execute` function in the `internal/executor/docker.go` file:
+
+```go
+func (e *DockerExecutor) Execute(code, language string) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd: []string{"sh", "-c", "mkdir -p /sandbox && echo $'" + strings.ReplaceAll(code, "'", "\\'") + "' > /sandbox/code." + getFileExtensionForLanguage(language) +
+			" && " + getRunCommandForLanguage(language, "/sandbox/code."+getFileExtensionForLanguage(language)) +
+			" && ls -l /sandbox"},
+		WorkingDir: "/sandbox",
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   128 * 1024 * 1024, // 128MB
+			CPUQuota: 50000,             // 50% CPU
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+}
+```
+
+In the updated `Execute` function, we made the following changes:
+
+1. We added `mkdir -p /sandbox` to the `Cmd` field to create the `/sandbox` directory inside the container.
+2. We updated the file paths to use `/sandbox` instead of `/app`.
+3. We added `WorkingDir: "/sandbox"` to set the working directory of the container to `/sandbox`.
+4. We removed the `Binds` field from `HostConfig` since we're no longer mounting the host directory.
+
+Now, let's update the test cases in the `TestDockerExecutor` function in the `tests/executor_test.go` file:
+
+```go
+func TestDockerExecutor(t *testing.T) {
+	// ...
+
+	// Test case 3: Print and return value
+	t.Run("PrintAndReturnValue", func(t *testing.T) {
+		code := `
+def add(a, b):
+    return a + b
+
+a = add(2, 3)
+print(a)
+a
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "5"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Test case 4: Create a file
+	t.Run("CreateFile", func(t *testing.T) {
+		code := `
+with open("/sandbox/output.txt", "w") as file:
+    file.write("Hello, File!")
+
+print("File created.")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "File created.\n-rw-r--r-- 1 root root 12 Jun  4 12:34 /sandbox/output.txt"
+		if !strings.Contains(result, expected) {
+			t.Errorf("Expected output to contain: %s, but got: %s", expected, result)
+		}
+	})
+
+	// ...
+}
+```
+
+In the updated test cases, we changed the file paths to use `/sandbox` instead of `/app`.
+
+Please update the test cases in your code and run the tests again. Verify that all test cases pass with the new `/sandbox` directory.
+
+Let me know if you have any further questions or if you'd like to add more test cases to cover different scenarios.
+
+**User:**
+
+Thank you! This is better, but still I get log for the code.py file etc.
+This is how the output from the test looks like:
+```bash
+$> go test ./tests/executor_test.go
+--- FAIL: TestDockerExecutor (1.39s)
+    --- FAIL: TestDockerExecutor/SuccessfulExecution (0.41s)
+        executor_test.go:25: Expected output: Hello, World!, but got: Hello, World!
+            total 4
+            -rw-r--r--    1 root     root            23 Apr  7 21:10 code.py
+    --- FAIL: TestDockerExecutor/PrintAndReturnValue (0.39s)
+        executor_test.go:64: Expected output: 5, but got: 5
+            total 4
+            -rw-r--r--    1 root     root            57 Apr  7 21:10 code.py
+    --- FAIL: TestDockerExecutor/CreateFile (0.39s)
+        executor_test.go:87: Expected output to contain: File created.
+            -rw-r--r-- 1 root root 12 Jun  4 12:34 /sandbox/output.txt, but got: File created.
+            total 8
+            -rw-r--r--    1 root     root           104 Apr  7 21:10 code.py
+            -rw-r--r--    1 root     root            12 Apr  7 21:10 output.txt
+FAIL
+FAIL    command-line-arguments  1.595s
+FAIL
+```
+I would like to see only if a new file is created and ignore all the rest of the output.
+Probably applying some filterring or checking with diff before and after running the code or in some other way. How can we do that?
