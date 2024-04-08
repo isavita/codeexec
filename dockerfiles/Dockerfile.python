@@ -1,0 +1,21 @@
+FROM python:3.11-alpine
+
+# Install necessary packages
+RUN apk add --no-cache --virtual .build-deps \
+    gcc \
+    musl-dev \
+    python3-dev \
+    && pip install --no-cache-dir numpy \
+    && apk del .build-deps
+
+# Set the working directory
+WORKDIR /app
+
+# Copy the requirements file (optional)
+# COPY requirements.txt .
+
+# Install dependencies from the requirements file (optional)
+# RUN pip install --no-cache-dir -r requirements.txt
+
+# Set the entry point
+ENTRYPOINT ["python"]

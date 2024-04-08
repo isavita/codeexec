@@ -3,6 +3,9 @@ package executor
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -33,11 +36,15 @@ func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (
 	ctx := context.Background()
 	resp, err := e.client.ContainerCreate(ctx, &container.Config{
 		Image: getImageForLanguage(language),
-		Cmd:   []string{"sh", "-c", "echo $'" + strings.ReplaceAll(code, "'", "\\'") + "' > code." + getFileExtensionForLanguage(language) + " && " + getRunCommandForLanguage(language, "code."+getFileExtensionForLanguage(language))},
+		Cmd:   []string{"code." + getFileExtensionForLanguage(language)},
 	}, &container.HostConfig{
 		Resources: container.Resources{
-			Memory:   128 * 1024 * 1024, // 128MB
-			CPUQuota: 50000,             // 50% CPU
+			Memory:     64 * 1024 * 1024, // 64MB
+			MemorySwap: 64 * 1024 * 1024, // 64MB (same as Memory to disable swap)
+			CPUQuota:   50000,            // 50% CPU
+		},
+		Binds: []string{
+			fmt.Sprintf("%s:/app/code.%s", createCodeFile(code, language), getFileExtensionForLanguage(language)),
 		},
 	}, nil, nil, "")
 	if err != nil {
@@ -55,14 +62,28 @@ func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (
 	defer cancel()
 
 	statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	var exitCode int64
 	select {
 	case err := <-errCh:
 		if err != nil {
 			return "", fmt.Errorf("failed to wait for container: %v", err)
 		}
-	case <-statusCh:
+	case result := <-statusCh:
+		exitCode = result.StatusCode
 	case <-ctx.Done():
 		return "", fmt.Errorf("container execution timed out after %s", timeout)
+	}
+
+	// Check the container exit code and status
+	containerInfo, err := e.client.ContainerInspect(ctx, resp.ID)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect container: %v", err)
+	}
+
+	if containerInfo.State.OOMKilled {
+		return "", fmt.Errorf("container exceeded memory limit")
+	} else if exitCode != 0 {
+		return "", fmt.Errorf("container exited with non-zero status code: %d", exitCode)
 	}
 
 	// Retrieve the container logs
@@ -123,11 +144,25 @@ func (e *DockerExecutor) syntaxCheck(code, language string) error {
 	return nil
 }
 
+func createCodeFile(code, language string) string {
+	tempDir, err := os.MkdirTemp("", "code")
+	if err != nil {
+		log.Fatalf("Failed to create temporary directory: %v", err)
+	}
+
+	codeFile := filepath.Join(tempDir, "code."+getFileExtensionForLanguage(language))
+	err = os.WriteFile(codeFile, []byte(code), 0644)
+	if err != nil {
+		log.Fatalf("Failed to write code to file: %v", err)
+	}
+
+	return codeFile
+}
+
 func getImageForLanguage(language string) string {
-	// Return the appropriate Docker image for the given language
 	switch language {
 	case "python":
-		return "python:3.11-alpine"
+		return "python-exec"
 	// Add more cases for other supported languages
 	default:
 		return ""
@@ -146,7 +181,6 @@ func getRunCommandForLanguage(language, fileName string) string {
 }
 
 func getFileExtensionForLanguage(language string) string {
-	// Return the appropriate file extension for the given language
 	switch language {
 	case "python":
 		return "py"

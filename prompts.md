@@ -1883,3 +1883,559 @@ Let me know if you have any further questions or if you'd like to add more test 
 **User:**
 
 Thank you! I needed to add to all other tests the timeout parameter as well. Now everything works as expected.
+Now let's add one more test that will test the memory limit. I would like to have a test that will allocate a lot of memory and exceed the limit. How can we do that?
+Here is how my test looks like:
+```go
+package tests
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/isavita/codeexec/internal/executor"
+)
+
+const timeout = 200 * time.Millisecond
+
+func TestDockerExecutor(t *testing.T) {
+	// Test case 1: Successful execution
+	t.Run("SuccessfulExecution", func(t *testing.T) {
+		code := "print('Hello, World!')"
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+
+		result, err := exec.Execute(code, language, timeout)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "Hello, World!"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Test case 2: Syntax error
+	t.Run("SyntaxError", func(t *testing.T) {
+		code := "print('Hello, World!"
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected a syntax error, but got nil")
+		}
+	})
+
+	// Test case 3: Print and return value
+	t.Run("PrintAndReturnValue", func(t *testing.T) {
+		code := `
+def add(a, b):
+	return a + b
+
+a = add(2, 3)
+print(a)
+a
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language, timeout)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "5"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Test case 4: Execution timeout
+	t.Run("ExecutionTimeout", func(t *testing.T) {
+		code := `
+import time
+
+print("Starting execution")
+time.sleep(5)
+print("Execution finished")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected an execution timeout error, but got nil")
+		} else if !strings.Contains(err.Error(), "container execution timed out") {
+			t.Errorf("Expected a timeout error, but got: %v", err)
+		}
+	})
+
+	// Add more test cases for different scenarios
+}
+```
+
+**Assistant:**
+
+To test the memory limit and ensure that the program terminates when it exceeds the specified limit, you can create a test case where the program allocates a large amount of memory, exceeding the configured memory limit.
+
+Here's how you can add a new test case to the `TestDockerExecutor` function in the `tests/executor_test.go` file:
+
+```go
+package tests
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/isavita/codeexec/internal/executor"
+)
+
+const timeout = 200 * time.Millisecond
+
+func TestDockerExecutor(t *testing.T) {
+	// ... (existing test cases)
+
+	// Test case 5: Exceed memory limit
+	t.Run("ExceedMemoryLimit", func(t *testing.T) {
+		code := `
+import numpy as np
+
+print("Allocating large array")
+large_array = np.zeros((1024, 1024, 1024), dtype=np.int8)
+print("Allocation finished")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected a memory limit exceeded error, but got nil")
+		} else if !strings.Contains(err.Error(), "exceeded memory limit") {
+			t.Errorf("Expected a memory limit exceeded error, but got: %v", err)
+		}
+	})
+
+	// Add more test cases for different scenarios
+}
+```
+
+In the new test case `ExceedMemoryLimit`, we provide a Python code snippet that imports the `numpy` library and attempts to allocate a large 3-dimensional array using `np.zeros((1024, 1024, 1024), dtype=np.int8)`. This allocation should exceed the memory limit set for the container.
+
+We expect the `Execute` function to return an error indicating that the memory limit was exceeded. We check for the presence of the "exceeded memory limit" error message in the returned error.
+
+However, for this test case to work, you need to make sure that the memory limit is properly enforced in the Docker container. You can update the `Execute` function in the `internal/executor/docker.go` file to set the memory limit:
+
+```go
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"sh", "-c", "echo $'" + strings.ReplaceAll(code, "'", "\\'") + "' > code." + getFileExtensionForLanguage(language) + " && " + getRunCommandForLanguage(language, "code."+getFileExtensionForLanguage(language))},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   64 * 1024 * 1024,  // 64MB
+			CPUQuota: 50000,             // 50% CPU
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+}
+```
+
+In the updated `Execute` function, we set the `Memory` field of `container.Resources` to `64 * 1024 * 1024` (64MB) to limit the memory usage of the container.
+
+Please add the new test case to your code and update the `Execute` function to set the memory limit. Run the tests again and verify that all test cases pass, including the new `ExceedMemoryLimit` test case.
+
+Let me know if you have any further questions or if you'd like to add more test cases to cover different scenarios.
+
+**User:**
+
+Thank you! I have one problem with the test.
+```bash
+--- FAIL: TestDockerExecutor (2.04s)
+    --- FAIL: TestDockerExecutor/ExceedMemoryLimit (0.38s)
+        executor_test.go:112: Expected a memory limit exceeded error, but got: execution error: Traceback (most recent call last):
+              File "//code.py", line 2, in <module>
+                import numpy as np
+            ModuleNotFoundError: No module named 'numpy'
+FAIL
+FAIL    command-line-arguments  2.289s
+FAIL
+```
+This test was very useful for me, because show me that I want to have standardised way of installing dependencies in the image. Could you add this in such a way that I easily can add more python libraries in the future to the image. I also would like to be done in a way that I can use easily in other languages with their package managers.
+Keep the test as it is and let's make the image to have numpy installed.
+
+**Assistant:**
+
+Certainly! To make it easy to install dependencies and manage packages for different languages, we can create a separate Dockerfile for each language. This allows us to customize the base image and install the necessary dependencies using the language-specific package managers.
+
+Let's create a Dockerfile for Python that includes the `numpy` library and provides a standardized way to install additional dependencies in the future.
+
+Create a new file named `Dockerfile.python` in your project directory with the following content:
+
+```dockerfile
+FROM python:3.11-alpine
+
+# Install necessary packages
+RUN apk add --no-cache --virtual .build-deps \
+    gcc \
+    musl-dev \
+    python3-dev \
+    && pip install --no-cache-dir numpy \
+    && apk del .build-deps
+
+# Set the working directory
+WORKDIR /app
+
+# Copy the requirements file (optional)
+COPY requirements.txt .
+
+# Install dependencies from the requirements file (optional)
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Set the entry point
+ENTRYPOINT ["python"]
+```
+
+In this Dockerfile:
+
+1. We use the `python:3.11-alpine` base image, which provides a lightweight Python environment.
+2. We install the necessary build dependencies (`gcc`, `musl-dev`, `python3-dev`) and the `numpy` library using `pip`.
+3. We set the working directory to `/app`.
+4. We copy a `requirements.txt` file (optional) to the working directory. This file can contain a list of additional Python dependencies you want to install.
+5. We install the dependencies from the `requirements.txt` file using `pip` (optional).
+6. We set the entry point to `python`, so the container will run the specified Python script by default.
+
+To use this Dockerfile, you need to build the Docker image. You can do this by running the following command in your project directory:
+
+```bash
+docker build -t python-exec -f Dockerfile.python .
+```
+
+This command builds the Docker image using the `Dockerfile.python` file and tags it as `python-exec`.
+
+Now, update the `getImageForLanguage` function in the `internal/executor/docker.go` file to use the custom Python image:
+
+```go
+func getImageForLanguage(language string) string {
+	switch language {
+	case "python":
+		return "python-exec"
+	// Add more cases for other supported languages
+	default:
+		return ""
+	}
+}
+```
+
+With these changes, the `ExceedMemoryLimit` test case should now pass since the `numpy` library is installed in the custom Python image.
+
+If you want to add more Python libraries in the future, you can simply add them to the `requirements.txt` file and rebuild the Docker image.
+
+For other languages, you can follow a similar approach by creating separate Dockerfiles and customizing them based on the language-specific package managers and dependencies.
+
+Please make the necessary changes to your code, build the custom Python Docker image, and run the tests again. Verify that all test cases pass, including the `ExceedMemoryLimit` test case.
+
+Let me know if you have any further questions or if you need assistance with other languages or package managers.
+
+**User:**
+
+I like this approach. It is easier to manage and extend in the future.
+However, I am facing one problem. All test are failing now, because of how the image is built/setup.
+Here is how the output looks like:
+```bash
+$> go test ./tests/executor_test.go
+--- FAIL: TestDockerExecutor (2.01s)
+    --- FAIL: TestDockerExecutor/SuccessfulExecution (0.46s)
+        executor_test.go:25: Unexpected error: execution error: python: can't open file '/app/sh': [Errno 2] No such file or directory
+        executor_test.go:29: Expected output: Hello, World!, but got: 
+    --- FAIL: TestDockerExecutor/PrintAndReturnValue (0.41s)
+        executor_test.go:64: Unexpected error: execution error: python: can't open file '/app/sh': [Errno 2] No such file or directory
+        executor_test.go:68: Expected output: 5, but got: 
+    --- FAIL: TestDockerExecutor/ExecutionTimeout (0.46s)
+        executor_test.go:90: Expected a timeout error, but got: execution error: python: can't open file '/app/sh': [Errno 2] No such file or directory
+    --- FAIL: TestDockerExecutor/ExceedMemoryLimit (0.44s)
+        executor_test.go:112: Expected a memory limit exceeded error, but got: execution error: python: can't open file '/app/sh': [Errno 2] No such file or directory
+FAIL
+FAIL    command-line-arguments  2.151s
+FAIL
+```
+
+**Assistant:**
+
+I apologize for the confusion. The issue is caused by the default entry point set in the Dockerfile. Since we set the entry point to `python`, it expects the command to be a Python script file, but the current implementation passes the command as a shell script.
+
+To fix this, we need to modify the `Execute` function in the `internal/executor/docker.go` file to write the Python code to a file and execute that file.
+
+Update the `Execute` function as follows:
+
+```go
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"code." + getFileExtensionForLanguage(language)},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   64 * 1024 * 1024, // 64MB
+			CPUQuota: 50000,            // 50% CPU
+		},
+		Binds: []string{
+			fmt.Sprintf("%s:/app/code.%s", createCodeFile(code, language), getFileExtensionForLanguage(language)),
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+}
+
+func createCodeFile(code, language string) string {
+	tempDir, err := ioutil.TempDir("", "code")
+	if err != nil {
+		log.Fatalf("Failed to create temporary directory: %v", err)
+	}
+
+	codeFile := filepath.Join(tempDir, "code."+getFileExtensionForLanguage(language))
+	err = ioutil.WriteFile(codeFile, []byte(code), 0644)
+	if err != nil {
+		log.Fatalf("Failed to write code to file: %v", err)
+	}
+
+	return codeFile
+}
+```
+
+In the updated `Execute` function:
+
+1. We modify the `Cmd` field to specify the Python script file name (`code.<extension>`) instead of passing the code as a shell script.
+2. We add a `Binds` field to the `HostConfig` to bind-mount the code file from the host to the container at `/app/code.<extension>`.
+3. We introduce a new function `createCodeFile` that creates a temporary file with the code content and returns the file path. This file is bind-mounted into the container.
+
+Additionally, update the `getFileExtensionForLanguage` function in the `internal/executor/docker.go` file to return the appropriate file extension for Python:
+
+```go
+func getFileExtensionForLanguage(language string) string {
+	switch language {
+	case "python":
+		return "py"
+	// Add more cases for other supported languages
+	default:
+		return ""
+	}
+}
+```
+
+With these changes, the tests should now pass successfully.
+
+Please make the necessary updates to your code and run the tests again. Verify that all test cases pass.
+
+Let me know if you have any further questions or if you encounter any issues.
+
+**User:**
+
+I did the changes that you suggested and they improve the situation, but I still have some problems.
+
+1. I needed to increase the timeout for the test to be instead of 200ms to 2s.
+2. The test is still failing because it doesn't get the expected message. Here is how the output looks like:
+```bash
+--- FAIL: TestDockerExecutor (2.27s)
+    --- FAIL: TestDockerExecutor/ExceedMemoryLimit (0.55s)
+        executor_test.go:110: Expected a memory limit exceeded error, but got nil
+FAIL
+FAIL    command-line-arguments  2.408s
+FAIL
+```
+
+**Assistant:**
+
+I apologize for the oversight. It seems that the memory limit error is not being properly propagated or detected in the current implementation. Let's make some adjustments to capture and handle the memory limit exceeded error correctly.
+
+Update the `Execute` function in the `internal/executor/docker.go` file as follows:
+
+```go
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"code." + getFileExtensionForLanguage(language)},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   64 * 1024 * 1024, // 64MB
+			CPUQuota: 50000,            // 50% CPU
+		},
+		Binds: []string{
+			fmt.Sprintf("%s:/app/code.%s", createCodeFile(code, language), getFileExtensionForLanguage(language)),
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+
+	// Wait for the container to finish or timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	var exitCode int64
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return "", fmt.Errorf("failed to wait for container: %v", err)
+		}
+	case result := <-statusCh:
+		exitCode = result.StatusCode
+	case <-ctx.Done():
+		return "", fmt.Errorf("container execution timed out after %s", timeout)
+	}
+
+	// Check the container exit code
+	if exitCode == 137 {
+		return "", fmt.Errorf("container exceeded memory limit")
+	} else if exitCode != 0 {
+		return "", fmt.Errorf("container exited with non-zero status code: %d", exitCode)
+	}
+
+	// ...
+}
+```
+
+In the updated `Execute` function:
+
+1. We modify the `select` statement to capture the container exit code from the `statusCh`.
+2. We add a check for the container exit code. If the exit code is 137, it indicates that the container was terminated due to exceeding the memory limit. In this case, we return an error with the message "container exceeded memory limit".
+3. We also check if the exit code is non-zero, indicating that the container exited with an error. In this case, we return an error with the message "container exited with non-zero status code" along with the actual exit code.
+
+With these changes, the `ExceedMemoryLimit` test case should now pass successfully.
+
+Additionally, you mentioned that you needed to increase the timeout for the tests to 2 seconds. You can update the `timeout` constant in the `tests/executor_test.go` file to reflect this change:
+
+```go
+const timeout = 2 * time.Second
+```
+
+Please make the necessary updates to your code and run the tests again. Verify that all test cases pass, including the `ExceedMemoryLimit` test case.
+
+Let me know if you have any further questions or if you encounter any issues.
+
+**User:**
+
+It seems like something is still not working as expected. The test is still failing.
+Here is how the output looks like:
+```bash
+$> go test ./tests/executor_test
+--- FAIL: TestDockerExecutor (2.32s)
+    --- FAIL: TestDockerExecutor/ExceedMemoryLimit (0.59s)
+        executor_test.go:109: Expected a resource limitation error, but got nil
+FAIL
+FAIL    command-line-arguments  2.460s
+FAIL
+```
+
+**Assistant:**
+
+I apologize for the confusion. It seems that the memory limit error is not being properly propagated or detected in the current implementation. Let's make some further adjustments to capture and handle the memory limit exceeded error correctly.
+
+Update the `Execute` function in the `internal/executor/docker.go` file as follows:
+
+```go
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	// ...
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"code." + getFileExtensionForLanguage(language)},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   64 * 1024 * 1024, // 64MB
+			CPUQuota: 50000,            // 50% CPU
+		},
+		Binds: []string{
+			fmt.Sprintf("%s:/app/code.%s", createCodeFile(code, language), getFileExtensionForLanguage(language)),
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// ...
+
+	// Wait for the container to finish or timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	var exitCode int64
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return "", fmt.Errorf("failed to wait for container: %v", err)
+		}
+	case result := <-statusCh:
+		exitCode = result.StatusCode
+	case <-ctx.Done():
+		return "", fmt.Errorf("container execution timed out after %s", timeout)
+	}
+
+	// Check the container exit code and status
+	containerInfo, err := e.client.ContainerInspect(ctx, resp.ID)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect container: %v", err)
+	}
+
+	if containerInfo.State.OOMKilled {
+		return "", fmt.Errorf("container exceeded memory limit")
+	} else if exitCode != 0 {
+		return "", fmt.Errorf("container exited with non-zero status code: %d", exitCode)
+	}
+
+	// ...
+}
+```
+
+In the updated `Execute` function:
+
+1. After waiting for the container to finish, we use the `ContainerInspect` function to retrieve detailed information about the container.
+2. We check the `OOMKilled` field of the container state. If it is set to `true`, it indicates that the container was terminated due to an out-of-memory (OOM) condition. In this case, we return an error with the message "container exceeded memory limit".
+3. We also check if the exit code is non-zero, indicating that the container exited with an error. In this case, we return an error with the message "container exited with non-zero status code" along with the actual exit code.
+
+With these changes, the `ExceedMemoryLimit` test case should now pass successfully.
+
+Please make the necessary updates to your code and run the tests again. Verify that all test cases pass, including the `ExceedMemoryLimit` test case.
+
+If the issue persists, please provide the full error message or any additional details that could help identify the problem.
+
+Let me know if you have any further questions or if you encounter any issues.

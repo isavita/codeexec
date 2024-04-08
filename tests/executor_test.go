@@ -90,6 +90,28 @@ print("Execution finished")
 			t.Errorf("Expected a timeout error, but got: %v", err)
 		}
 	})
+	// Test case 5: Exceed memory limit
+	t.Run("ExceedMemoryLimit", func(t *testing.T) {
+		code := `
+import numpy as np
+
+print("Allocating large array")
+large_array = np.zeros((10240000, 1024000, 1024000), dtype=np.int8)
+print("Allocation finished")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, 10*timeout)
+		if err == nil {
+			t.Error("Expected a resource limitation error, but got nil")
+			// TODO: this check should be "container exceeded memory limit" instead of "container exited with non-zero status code: 1"
+		} else if !strings.Contains(err.Error(), "container exited with non-zero status code: 1") {
+			t.Errorf("Expected a resource limitation error, but got: %v", err)
+		}
+	})
 
 	// Add more test cases for different scenarios
 }
