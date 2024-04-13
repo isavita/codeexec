@@ -2439,3 +2439,1032 @@ Please make the necessary updates to your code and run the tests again. Verify t
 If the issue persists, please provide the full error message or any additional details that could help identify the problem.
 
 Let me know if you have any further questions or if you encounter any issues.
+
+**User:**
+
+Thank you! Now I would like to use the same python image and for the syntax checks as well.
+Also, what is good practice for providing a lot of options to the Execute? Should I use a struct or just pass them as arguments? I want to make it extensible for the future and to accept a lot of options in the future.
+Here is my current code:
+```go
+package executor
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
+)
+
+type DockerExecutor struct {
+	client *client.Client
+}
+
+func NewDockerExecutor() (*DockerExecutor, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv)
+	if err != nil {
+		return nil, err
+	}
+	return &DockerExecutor{client: cli}, nil
+}
+
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	// Perform syntax check
+	if err := e.syntaxCheck(code, language); err != nil {
+		return "", fmt.Errorf("syntax check failed: %v", err)
+	}
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"code." + getFileExtensionForLanguage(language)},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:     64 * 1024 * 1024, // 64MB
+			MemorySwap: 64 * 1024 * 1024, // 64MB (same as Memory to disable swap)
+			CPUQuota:   50000,            // 50% CPU
+		},
+		Binds: []string{
+			fmt.Sprintf("%s:/app/code.%s", createCodeFile(code, language), getFileExtensionForLanguage(language)),
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// Start the container
+	if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return "", fmt.Errorf("failed to start container: %v", err)
+	}
+
+	// Wait for the container to finish or timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	var exitCode int64
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return "", fmt.Errorf("failed to wait for container: %v", err)
+		}
+	case result := <-statusCh:
+		exitCode = result.StatusCode
+	case <-ctx.Done():
+		return "", fmt.Errorf("container execution timed out after %s", timeout)
+	}
+
+	// Check the container exit code and status
+	containerInfo, err := e.client.ContainerInspect(ctx, resp.ID)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect container: %v", err)
+	}
+
+	if containerInfo.State.OOMKilled {
+		return "", fmt.Errorf("container exceeded memory limit")
+	} else if exitCode != 0 {
+		return "", fmt.Errorf("container exited with non-zero status code: %d", exitCode)
+	}
+
+	// Retrieve the container logs
+	out, err := e.client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve container logs: %v", err)
+	}
+	defer out.Close()
+
+	// Read the logs and return the output
+	var stdout, stderr strings.Builder
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, out); err != nil {
+		return "", fmt.Errorf("failed to read container logs: %v", err)
+	}
+
+	if stderr.Len() > 0 {
+		return "", fmt.Errorf("execution error: %s", stderr.String())
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (e *DockerExecutor) syntaxCheck(code, language string) error {
+	// Implement syntax check logic based on the language
+	switch language {
+	case "python":
+		// Use a lightweight Python container to check the syntax
+		ctx := context.Background()
+		resp, err := e.client.ContainerCreate(ctx, &container.Config{
+			Image: "python:3.11-alpine",
+			Cmd:   []string{"python", "-c", "import ast; ast.parse('''" + code + "''')"},
+		}, nil, nil, nil, "")
+		if err != nil {
+			return err
+		}
+		defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+		if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+			return err
+		}
+
+		statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return err
+			}
+		case status := <-statusCh:
+			if status.StatusCode != 0 {
+				return fmt.Errorf("syntax check failed")
+			}
+		}
+	// Add more cases for other supported languages
+	default:
+		return fmt.Errorf("unsupported language: %s", language)
+	}
+
+	return nil
+}
+
+func createCodeFile(code, language string) string {
+	tempDir, err := os.MkdirTemp("", "code")
+	if err != nil {
+		log.Fatalf("Failed to create temporary directory: %v", err)
+	}
+
+	codeFile := filepath.Join(tempDir, "code."+getFileExtensionForLanguage(language))
+	err = os.WriteFile(codeFile, []byte(code), 0644)
+	if err != nil {
+		log.Fatalf("Failed to write code to file: %v", err)
+	}
+
+	return codeFile
+}
+
+func getImageForLanguage(language string) string {
+	switch language {
+	case "python":
+		return "python-exec"
+	// Add more cases for other supported languages
+	default:
+		return ""
+	}
+}
+
+func getRunCommandForLanguage(language, fileName string) string {
+	// Return the appropriate run command for the given language and file name
+	switch language {
+	case "python":
+		return fmt.Sprintf("python %s", fileName)
+	// Add more cases for other supported languages
+	default:
+		return ""
+	}
+}
+
+func getFileExtensionForLanguage(language string) string {
+	switch language {
+	case "python":
+		return "py"
+	// Add more cases for other supported languages
+	default:
+		return ""
+	}
+}
+```
+
+# START USING `GPT-4-turbo-2024-04-09` MODEL
+
+**User:**
+
+I have following golang project structure:
+```bash
+ ~/git/codeexec │ main > ls -R
+Dockerfile         cmd                dockerfiles        go.sum             pkg                tests
+README.md          docker-compose.yml go.mod             internal           prompts.md
+./cmd:
+api
+./cmd/api:
+main.go
+./dockerfiles:
+Dockerfile.python
+./internal:
+executor   handler    middleware util
+./internal/executor:
+docker.go    executor.go  languages.go
+./internal/handler:
+handler.go
+./internal/middleware:
+middleware.go
+./internal/util:
+util.go
+./pkg:
+config errors
+./pkg/config:
+config.go
+./pkg/errors:
+errors.go
+./tests:
+executor_test.go handler_test.go
+```
+
+I am currently working using TDD (Test Driven Development) and I have written some tests in `tests` directory.
+
+The project is not complete yet and I would like to continue working on it with your help.
+
+Here is the current content of the `executor_test.go` file:
+```go
+package tests
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/isavita/codeexec/internal/executor"
+)
+
+const timeout = 200 * time.Millisecond
+
+func TestDockerExecutor(t *testing.T) {
+	// Test case 1: Successful execution
+	t.Run("SuccessfulExecution", func(t *testing.T) {
+		code := "print('Hello, World!')"
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+
+		result, err := exec.Execute(code, language, timeout)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "Hello, World!"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Test case 2: Syntax error
+	t.Run("SyntaxError", func(t *testing.T) {
+		code := "print('Hello, World!"
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected a syntax error, but got nil")
+		}
+	})
+
+	// Test case 3: Print and return value
+	t.Run("PrintAndReturnValue", func(t *testing.T) {
+		code := `
+def add(a, b):
+	return a + b
+
+a = add(2, 3)
+print(a)
+a
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language, timeout)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "5"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Test case 4: Execution timeout
+	t.Run("ExecutionTimeout", func(t *testing.T) {
+		code := `
+import time
+
+print("Starting execution")
+time.sleep(5)
+print("Execution finished")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected an execution timeout error, but got nil")
+		} else if !strings.Contains(err.Error(), "container execution timed out") {
+			t.Errorf("Expected a timeout error, but got: %v", err)
+		}
+	})
+	// Test case 5: Exceed memory limit
+	t.Run("ExceedMemoryLimit", func(t *testing.T) {
+		code := `
+import numpy as np
+
+print("Allocating large array")
+large_array = np.zeros((10240000, 1024000, 1024000), dtype=np.int8)
+print("Allocation finished")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, 10*timeout)
+		if err == nil {
+			t.Error("Expected a resource limitation error, but got nil")
+			// TODO: this check should be "container exceeded memory limit" instead of "container exited with non-zero status code: 1"
+		} else if !strings.Contains(err.Error(), "container exited with non-zero status code: 1") {
+			t.Errorf("Expected a resource limitation error, but got: %v", err)
+		}
+	})
+
+	// Add more test cases for different scenarios
+}
+```
+and here is the content of the `docker.go` file:
+```go
+package executor
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
+)
+
+type DockerExecutor struct {
+	client *client.Client
+}
+
+func NewDockerExecutor() (*DockerExecutor, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv)
+	if err != nil {
+		return nil, err
+	}
+	return &DockerExecutor{client: cli}, nil
+}
+
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	// Perform syntax check
+	if err := e.syntaxCheck(code, language); err != nil {
+		return "", fmt.Errorf("syntax check failed: %v", err)
+	}
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"code." + getFileExtensionForLanguage(language)},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:     64 * 1024 * 1024, // 64MB
+			MemorySwap: 64 * 1024 * 1024, // 64MB (same as Memory to disable swap)
+			CPUQuota:   50000,            // 50% CPU
+		},
+		Binds: []string{
+			fmt.Sprintf("%s:/app/code.%s", createCodeFile(code, language), getFileExtensionForLanguage(language)),
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// Start the container
+	if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return "", fmt.Errorf("failed to start container: %v", err)
+	}
+
+	// Wait for the container to finish or timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	var exitCode int64
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return "", fmt.Errorf("failed to wait for container: %v", err)
+		}
+	case result := <-statusCh:
+		exitCode = result.StatusCode
+	case <-ctx.Done():
+		return "", fmt.Errorf("container execution timed out after %s", timeout)
+	}
+
+	// Check the container exit code and status
+	containerInfo, err := e.client.ContainerInspect(ctx, resp.ID)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect container: %v", err)
+	}
+
+	if containerInfo.State.OOMKilled {
+		return "", fmt.Errorf("container exceeded memory limit")
+	} else if exitCode != 0 {
+		return "", fmt.Errorf("container exited with non-zero status code: %d", exitCode)
+	}
+
+	// Retrieve the container logs
+	out, err := e.client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve container logs: %v", err)
+	}
+	defer out.Close()
+
+	// Read the logs and return the output
+	var stdout, stderr strings.Builder
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, out); err != nil {
+		return "", fmt.Errorf("failed to read container logs: %v", err)
+	}
+
+	if stderr.Len() > 0 {
+		return "", fmt.Errorf("execution error: %s", stderr.String())
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (e *DockerExecutor) syntaxCheck(code, language string) error {
+	// Implement syntax check logic based on the language
+	switch language {
+	case "python":
+		// Use a lightweight Python container to check the syntax
+		ctx := context.Background()
+		resp, err := e.client.ContainerCreate(ctx, &container.Config{
+			Image: "python:3.11-alpine",
+			Cmd:   []string{"python", "-c", "import ast; ast.parse('''" + code + "''')"},
+		}, nil, nil, nil, "")
+		if err != nil {
+			return err
+		}
+		defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+		if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+			return err
+		}
+
+		statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return err
+			}
+		case status := <-statusCh:
+			if status.StatusCode != 0 {
+				return fmt.Errorf("syntax check failed")
+			}
+		}
+	// Add more cases for other supported languages
+	default:
+		return fmt.Errorf("unsupported language: %s", language)
+	}
+
+	return nil
+}
+
+func createCodeFile(code, language string) string {
+	tempDir, err := os.MkdirTemp("", "code")
+	if err != nil {
+		log.Fatalf("Failed to create temporary directory: %v", err)
+	}
+
+	codeFile := filepath.Join(tempDir, "code."+getFileExtensionForLanguage(language))
+	err = os.WriteFile(codeFile, []byte(code), 0644)
+	if err != nil {
+		log.Fatalf("Failed to write code to file: %v", err)
+	}
+
+	return codeFile
+}
+
+func getImageForLanguage(language string) string {
+	switch language {
+	case "python":
+		return "python-exec"
+	// Add more cases for other supported languages
+	default:
+		return ""
+	}
+}
+
+func getRunCommandForLanguage(language, fileName string) string {
+	// Return the appropriate run command for the given language and file name
+	switch language {
+	case "python":
+		return fmt.Sprintf("python %s", fileName)
+	// Add more cases for other supported languages
+	default:
+		return ""
+	}
+}
+
+func getFileExtensionForLanguage(language string) string {
+	switch language {
+	case "python":
+		return "py"
+	// Add more cases for other supported languages
+	default:
+		return ""
+	}
+}
+```
+
+I would like to add a test for running a javascript code and I would like to have a standardised way of adding new languages in the future. In the way that I have done for python. Let's start with adding a test for javascript and then we can add a standardised way of adding new languages.
+
+**Assistant:**
+
+To incorporate JavaScript support into your existing Golang project setup, which is structured to execute code within Docker containers, we need to extend both the testing framework and the DockerExecutor service. Let's break down the steps:
+
+### 1. Update DockerExecutor to Support JavaScript
+
+**Add JavaScript Support in Utility Functions:**
+- Modify `getImageForLanguage` to specify the Docker image for JavaScript.
+- Add a JavaScript file extension handler in `getFileExtensionForLanguage`.
+
+Let's first update the `getImageForLanguage` and `getFileExtensionForLanguage` functions to include JavaScript:
+
+```go
+func getImageForLanguage(language string) string {
+    switch language {
+    case "python":
+        return "python-exec"  // Your custom Python image
+    case "javascript":
+        return "node:14-alpine"  // Example Node.js image
+    default:
+        return ""
+    }
+}
+
+func getFileExtensionForLanguage(language string) string {
+    switch language {
+    case "python":
+        return "py"
+    case "javascript":
+        return "js"
+    default:
+        return ""
+    }
+}
+```
+
+### 2. Write JavaScript-Specific Test in `executor_test.go`
+
+We will add a test case in the `executor_test.go` file to handle JavaScript execution:
+
+```go
+// Test case for JavaScript execution
+t.Run("JavaScriptExecution", func(t *testing.T) {
+    code := "console.log('Hello, JavaScript!');"
+    language := "javascript"
+    exec, err := executor.NewDockerExecutor()
+    if err != nil {
+        t.Fatalf("Failed to create Docker executor: %v", err)
+    }
+
+    result, err := exec.Execute(code, language, timeout)
+    if err != nil {
+        t.Errorf("Unexpected error: %v", err)
+    }
+    expected := "Hello, JavaScript!"
+    if result != expected {
+        t.Errorf("Expected output: %s, but got: %s", expected, result)
+    }
+})
+```
+
+### 3. Generalize Language Handling
+
+You've already started to structure your application in a way that facilitates the addition of new programming languages by abstracting language-specific details into helper functions. Continue this pattern for aspects such as syntax checks and command-line arguments:
+
+- **Add a general function to determine the run command:** Modify or add a function that returns the command to execute the code file based on the language.
+  
+Here’s how you might implement that:
+
+```go
+func getRunCommandForLanguage(language, fileName string) string {
+    switch language {
+    case "python":
+        return fmt.Sprintf("python %s", fileName)
+    case "javascript":
+        return fmt.Sprintf("node %s", fileName)
+    default:
+        return ""
+    }
+}
+```
+
+### 4. Further Extensions
+
+For further standardization and expansion:
+- **Implement a language configuration system**, possibly using a JSON or YAML file, where you can specify language settings (like Docker images, file extensions, and run commands). This can be read into your application at runtime.
+- **Abstract syntax checking** in a similar way, possibly by defining containers or commands for each language that can perform a syntax check.
+
+These steps should help you integrate JavaScript into your testing framework and prepare your project structure for easier inclusion of additional programming languages in the future.
+
+**User:**
+
+Thank you! I did all changes that you suggested, but the test is failing. I think it is because we do not have syntax check for javascript. Let's make a syntax check for javascript and then I will run the test again.
+
+**Assistant:**
+
+To implement a syntax check for JavaScript in your DockerExecutor setup, you'll need to create a containerized environment where you can run a JavaScript interpreter to validate the syntax without executing the code. Node.js provides a convenient option for this with its `--check` flag which verifies the syntax of a file without executing it.
+
+### Steps to Implement JavaScript Syntax Check
+
+**Modify the `syntaxCheck` function:**
+
+You will add a case for JavaScript in your existing `syntaxCheck` method. This will involve setting up a Docker container with a Node.js image that uses the `--check` flag to validate the JavaScript code. Here's how you can do it:
+
+1. **Update the Syntax Check Function:**
+   - You'll use the DockerExecutor's `client` to create and start a container specifically for syntax checking JavaScript code.
+
+```go
+func (e *DockerExecutor) syntaxCheck(code, language string) error {
+    switch language {
+    case "python":
+        // Python syntax check logic as before
+    case "javascript":
+        ctx := context.Background()
+        // Prepare a temporary file with the JavaScript code
+        codeFile := createCodeFile(code, language)
+        defer os.Remove(codeFile) // Clean up the file afterwards
+
+        // Create and start the syntax checking container
+        resp, err := e.client.ContainerCreate(ctx, &container.Config{
+            Image: "node:14-alpine",
+            Cmd:   []string{"node", "--check", filepath.Base(codeFile)},
+        }, &container.HostConfig{
+            Binds: []string{
+                fmt.Sprintf("%s:/app/%s", codeFile, filepath.Base(codeFile)),
+            },
+        }, nil, nil, "")
+        if err != nil {
+            return err
+        }
+        defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+        if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+            return err
+        }
+
+        statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+        select {
+        case err := <-errCh:
+            if err != nil {
+                return err
+            }
+        case status := <-statusCh:
+            if status.StatusCode != 0 {
+                return fmt.Errorf("syntax check failed: status code %d", status.StatusCode)
+            }
+        }
+
+    default:
+        return fmt.Errorf("unsupported language: %s", language)
+    }
+    return nil
+}
+```
+
+### Explanation:
+- **Node.js Image:** The `node:14-alpine` image is used for lightweight and efficient syntax checking.
+- **`--check` Flag:** This Node.js option checks the syntax of the specified file.
+- **Temporary File Creation:** The JavaScript code is written to a temporary file, which is then mounted into the container for syntax checking.
+- **Container Execution:** The container is created, started, and monitored for completion. The syntax check result is determined by the container's exit status.
+
+With this implementation, you should now have a functioning syntax check for JavaScript, which will help ensure that any syntax errors are caught before trying to execute the JavaScript code in your test cases. Once you integrate this modification, your JavaScript test should be more robust and capable of detecting syntax issues.
+
+**User:**
+
+I change the image to `node:19-alpine` and I run the test again. It is still failing. Here is the output:
+```bash
+--- FAIL: TestDockerExecutor (2.59s)
+    --- FAIL: TestDockerExecutor/JavaScriptExecution (0.22s)
+        executor_test.go:127: Unexpected error: syntax check failed: syntax check failed: status code 1
+        executor_test.go:131: Expected output: Hello, JavaScript!, but got: 
+FAIL
+FAIL    command-line-arguments  2.712s
+FAIL
+```
+What is the problem?
+
+**Assistant:**
+
+The failure message from your test indicates that the syntax check for the JavaScript code is failing with a status code of 1. This typically means there's an error during the syntax check phase. Here are a few potential causes and troubleshooting steps:
+
+### 1. Verify the JavaScript Code Syntax
+First, ensure that the JavaScript code itself is syntactically correct. Here is the code snippet you were testing:
+```javascript
+console.log('Hello, JavaScript!');
+```
+This is syntactically correct JavaScript. If the code in your test setup matches this, syntax should not be an issue.
+
+### 2. Check the Node.js Command and Environment
+Given that the syntax is correct, there may be an issue with how the Node.js command is executed within the Docker container. The `--check` option should correctly assess this code, but let's verify a few things:
+
+- **File Mounting**: Ensure that the code file is correctly mounted into the Docker container and that Node.js has access to it. Path issues or permissions could be factors.
+
+- **Node.js Version**: Node.js versions can sometimes introduce changes in behavior. You switched to `node:19-alpine`, so ensure there are no version-specific issues with the `--check` option by manually testing it in a local container if possible.
+
+### 3. Enhance Logging for Debugging
+To better understand what's happening inside the container, modify the syntax check to output any errors encountered by Node.js:
+
+```go
+func (e *DockerExecutor) syntaxCheck(code, language string) error {
+    switch language {
+    case "javascript":
+        ctx := context.Background()
+        codeFile := createCodeFile(code, language)
+        defer os.Remove(codeFile)
+
+        resp, err := e.client.ContainerCreate(ctx, &container.Config{
+            Image: "node:19-alpine",
+            Cmd:   []string{"node", "--check", filepath.Base(codeFile)},
+        }, &container.HostConfig{
+            Binds: []string{fmt.Sprintf("%s:/app/%s", codeFile, filepath.Base(codeFile))},
+        }, nil, nil, "")
+        if err != nil {
+            return err
+        }
+        defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+        if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+            return err
+        }
+
+        statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+        select {
+        case err := <-errCh:
+            if err != nil {
+                return err
+            }
+        case status := <-statusCh:
+            if status.StatusCode != 0 {
+                // Retrieve logs to see the syntax error
+                out, logErr := e.client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+                if logErr != nil {
+                    return fmt.Errorf("syntax check failed with status code %d and unable to retrieve logs: %v", status.StatusCode, logErr)
+                }
+                defer out.Close()
+                var stderr strings.Builder
+                if _, err := stdcopy.StdCopy(nil, &stderr, out); err != nil {
+                    return fmt.Errorf("failed to read container logs: %v", err)
+                }
+                return fmt.Errorf("syntax check failed: status code %d, error: %s", status.StatusCode, stderr.String())
+            }
+        }
+    default:
+        return fmt.Errorf("unsupported language: %s", language)
+    }
+    return nil
+}
+```
+
+### 4. Manually Test the Docker Command
+To isolate the issue, you can manually test the Docker command used for the syntax check. Run the following command in your terminal (adjust paths as needed):
+
+```bash
+docker run --rm -v "$(pwd):/app" node:19-alpine node --check /app/test.js
+```
+Replace `test.js` with the actual file path or the code snippet directly to see if you get any syntax errors or other issues.
+
+Following these steps should help you identify why the syntax check is failing and allow you to correct the issue.
+
+**User:**
+
+I did step 4 and worked fine. However, the test is still failing, but now I have more information. Here is the output:
+```bash
+--- FAIL: TestDockerExecutor (2.43s)
+    --- FAIL: TestDockerExecutor/JavaScriptExecution (0.19s)
+        executor_test.go:127: Unexpected error: syntax check failed: syntax check failed: status code 1, error: node:internal/modules/cjs/loader:1093
+              throw err;
+              ^
+            
+            Error: Cannot find module '/code.js'
+                at Module._resolveFilename (node:internal/modules/cjs/loader:1090:15)
+                at node:internal/main/check_syntax:34:20 {
+              code: 'MODULE_NOT_FOUND',
+              requireStack: []
+            }
+            
+            Node.js v19.9.0
+        executor_test.go:131: Expected output: Hello, JavaScript!, but got: 
+FAIL
+FAIL    command-line-arguments  2.575s
+FAIL
+```
+
+I am not sure the file is there. Could you please fix the issue?
+
+**Assistant:**
+
+The error message indicates that Node.js cannot find the file `/code.js`, which means there's likely an issue with how the file path is being specified or mounted in the Docker container. Let's ensure the file is correctly created, named, and mounted.
+
+### Steps to Fix the File Path and Mounting Issue
+
+1. **Verify File Creation**:
+   Ensure that the `createCodeFile` function creates the file in a location that's correctly referenced when mounting into the Docker container.
+
+2. **Adjust File Path in Docker Command**:
+   The error shows that Node.js is looking for `/code.js` at the root of the filesystem in the container, which suggests a problem with how the file path is constructed or mounted. Let's adjust this to make sure the file path aligns with where the file is actually stored.
+
+Here's how you can adjust the `syntaxCheck` function to ensure the file is correctly mounted:
+
+```go
+func (e *DockerExecutor) syntaxCheck(code, language string) error {
+    switch language {
+    case "javascript":
+        ctx := context.Background()
+        codeFile := createCodeFile(code, language)  // Ensure this function returns a valid path
+        defer os.Remove(codeFile)  // Clean up after checking
+
+        // Make sure the container path is specified correctly
+        containerPath := "/app/" + filepath.Base(codeFile)  // Use a specific folder instead of root
+
+        resp, err := e.client.ContainerCreate(ctx, &container.Config{
+            Image: "node:19-alpine",
+            Cmd:   []string{"node", "--check", containerPath},
+        }, &container.HostConfig{
+            Binds: []string{fmt.Sprintf("%s:%s", codeFile, containerPath)},
+        }, nil, nil, "")
+        if err != nil {
+            return err
+        }
+        defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+        if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+            return err
+        }
+
+        statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+        select {
+        case err := <-errCh:
+            if err != nil {
+                return err
+            }
+        case status := <-statusCh:
+            if status.StatusCode != 0 {
+                // Retrieve logs to see the syntax error
+                out, logErr := e.client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+                if logErr != nil {
+                    return fmt.Errorf("syntax check failed with status code %d and unable to retrieve logs: %v", status.StatusCode, logErr)
+                }
+                defer out.Close()
+                var stderr strings.Builder
+                if _, err := stdcopy.StdCopy(nil, &stderr, out); err != nil {
+                    return fmt.Errorf("failed to read container logs: %v", err)
+                }
+                return fmt.Errorf("syntax check failed: status code %d, error: %s", status.StatusCode, stderr.String())
+            }
+        }
+    default:
+        return fmt.Errorf("unsupported language: %s", language)
+    }
+    return nil
+}
+```
+
+### Explanation
+- **Correct Container Path**: The `containerPath` is now clearly defined as `/app/` plus the filename, ensuring the Docker bind mount maps the host file to the correct container path.
+- **Detailed Error Logging**: Continuing to log detailed error output from the container will help diagnose any further issues.
+
+With these adjustments, the file should be found and checked correctly by Node.js in the Docker container. This should resolve the `MODULE_NOT_FOUND` error and help the syntax check pass if there are no syntax errors in the JavaScript code.
+
+**User:**
+
+Now the test does not fail anymore with syntax check error. However, it is failing with the following error:
+```bash
+--- FAIL: TestDockerExecutor (5.06s)
+    --- FAIL: TestDockerExecutor/JavaScriptExecution (0.55s)
+        executor_test.go:127: Unexpected error: container exited with non-zero status code: 1
+        executor_test.go:131: Expected output: Hello, JavaScript!, but got: 
+FAIL
+FAIL    command-line-arguments  5.312s
+FAIL
+```
+
+I suspect it is because the code is not executed. Could you please help me to fix this issue?
+Here is how the Dockerfile.python looks like:
+```Dockerfile
+FROM python:3.11-alpine
+
+# Install necessary packages
+RUN apk add --no-cache --virtual .build-deps \
+    gcc \
+    musl-dev \
+    python3-dev \
+    && pip install --no-cache-dir numpy \
+    && apk del .build-deps
+
+# Set the working directory
+WORKDIR /app
+
+# Copy the requirements file (optional)
+# COPY requirements.txt .
+
+# Install dependencies from the requirements file (optional)
+# RUN pip install --no-cache-dir -r requirements.txt
+
+# Set the entry point
+ENTRYPOINT ["python"]
+```
+I would like to have a similar Dockerfile for javascript.
+This will allow me to run the javascript code in the same way as python.
+
+**Assistant:**
+
+To resolve the issue with the JavaScript execution, we need to set up a Docker environment similar to what you have for Python, but tailored for running JavaScript code. The `container exited with non-zero status code: 1` usually indicates that the command that was executed inside the container failed. This could be due to the way the JavaScript file is being executed or an issue within the code itself.
+
+### Creating a Dockerfile for JavaScript Execution
+
+We'll create a Dockerfile similar to the one you have for Python, but based on a Node.js image. Here's how you can set it up:
+
+```Dockerfile
+# Use an official Node.js runtime as a parent image
+FROM node:19-alpine
+
+# Set the working directory
+WORKDIR /app
+
+# Copy the local code to the container
+COPY . /app
+
+# Set the entry point to node so we can run JavaScript files
+ENTRYPOINT ["node"]
+```
+
+This Dockerfile is straightforward because Node.js and npm are already included in the official Node.js images, so you usually don't need to install additional packages to run basic JavaScript code. However, if your code depends on external npm packages, you would need to install those packages, possibly using a `package.json` file.
+
+### Integrating the Dockerfile with Your Application
+
+1. **Build the Docker image**:
+   - Name the image in a way that can be referenced easily in your Go code (e.g., `javascript-exec`).
+   - Run the following command in the directory containing the Dockerfile:
+     ```bash
+     docker build -t javascript-exec .
+     ```
+
+2. **Update `getImageForLanguage` in Go**:
+   - Ensure the `getImageForLanguage` function in your Go application points to this new Docker image for JavaScript:
+     ```go
+     func getImageForLanguage(language string) string {
+         switch language {
+         case "python":
+             return "python-exec"  // Your custom Python image
+         case "javascript":
+             return "javascript-exec"  // The new JavaScript image
+         default:
+             return ""
+         }
+     }
+     ```
+
+3. **Ensure Proper Command Execution**:
+   - Verify that the execution command within the Docker container is set up correctly to execute the JavaScript file:
+     ```go
+     func getRunCommandForLanguage(language, fileName string) string {
+         switch language {
+         case "python":
+             return fmt.Sprintf("python %s", fileName)
+         case "javascript":
+             return fmt.Sprintf("node %s", fileName)
+         default:
+             return ""
+         }
+     }
+     ```
+   - Make sure this command aligns with how you set up your container (adjust the filename and path if needed).
+
+### Test Your Setup
+
+Once these changes are made, run your tests again. This setup should now correctly handle the execution of JavaScript code, assuming there are no other issues with the code itself or the Docker configuration.
+
+If it still fails, check the logs for any runtime errors in the JavaScript code and ensure that the container's file system paths and permissions are correctly configured to access and execute the JavaScript file.
+
+**User:**
+
+I followed your instructions and now the test is passing. Thank you for your help!

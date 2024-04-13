@@ -136,11 +136,53 @@ func (e *DockerExecutor) syntaxCheck(code, language string) error {
 				return fmt.Errorf("syntax check failed")
 			}
 		}
-	// Add more cases for other supported languages
+	case "javascript":
+		ctx := context.Background()
+		codeFile := createCodeFile(code, language) // Ensure this function returns a valid path
+		defer os.Remove(codeFile)                  // Clean up after checking
+
+		// Make sure the container path is specified correctly
+		containerPath := "/app/" + filepath.Base(codeFile) // Use a specific folder instead of root
+
+		resp, err := e.client.ContainerCreate(ctx, &container.Config{
+			Image: "node:19-alpine",
+			Cmd:   []string{"node", "--check", containerPath},
+		}, &container.HostConfig{
+			Binds: []string{fmt.Sprintf("%s:%s", codeFile, containerPath)},
+		}, nil, nil, "")
+		if err != nil {
+			return err
+		}
+		defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+		if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+			return err
+		}
+
+		statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return err
+			}
+		case status := <-statusCh:
+			if status.StatusCode != 0 {
+				// Retrieve logs to see the syntax error
+				out, logErr := e.client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+				if logErr != nil {
+					return fmt.Errorf("syntax check failed with status code %d and unable to retrieve logs: %v", status.StatusCode, logErr)
+				}
+				defer out.Close()
+				var stderr strings.Builder
+				if _, err := stdcopy.StdCopy(nil, &stderr, out); err != nil {
+					return fmt.Errorf("failed to read container logs: %v", err)
+				}
+				return fmt.Errorf("syntax check failed: status code %d, error: %s", status.StatusCode, stderr.String())
+			}
+		}
 	default:
 		return fmt.Errorf("unsupported language: %s", language)
 	}
-
 	return nil
 }
 
@@ -163,7 +205,8 @@ func getImageForLanguage(language string) string {
 	switch language {
 	case "python":
 		return "python-exec"
-	// Add more cases for other supported languages
+	case "javascript":
+		return "javascript-exec"
 	default:
 		return ""
 	}
@@ -174,7 +217,8 @@ func getRunCommandForLanguage(language, fileName string) string {
 	switch language {
 	case "python":
 		return fmt.Sprintf("python %s", fileName)
-	// Add more cases for other supported languages
+	case "javascript":
+		return fmt.Sprintf("node %s", fileName)
 	default:
 		return ""
 	}
@@ -184,7 +228,8 @@ func getFileExtensionForLanguage(language string) string {
 	switch language {
 	case "python":
 		return "py"
-	// Add more cases for other supported languages
+	case "javascript":
+		return "js"
 	default:
 		return ""
 	}

@@ -113,5 +113,24 @@ print("Allocation finished")
 		}
 	})
 
+	// Test case for JavaScript execution
+	t.Run("JavaScriptExecution", func(t *testing.T) {
+		code := "console.log('Hello, JavaScript!');"
+		language := "javascript"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+
+		result, err := exec.Execute(code, language, timeout)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "Hello, JavaScript!"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
 	// Add more test cases for different scenarios
 }
