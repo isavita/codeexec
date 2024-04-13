@@ -3518,4 +3518,603 @@ Make sure your test framework is set up to run this new test along with the othe
 
 Once you’ve added this test, run your test suite to verify that the syntax check for JavaScript correctly identifies syntax errors. This will solidify the reliability of your testing framework as you continue to add more features or support for additional programming languages.
 
+# START USING `Claude Opus` MODEL
+
 **User:**
+
+Thank you! The test is passing. Now before to continue working on the project, I would like to refactor the code to make it more readable and maintainable. I would like to focus on the `docker.go` file. Could you please help me with this?
+Here is the content of the `docker.go` file:
+```go
+package executor
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
+)
+
+type DockerExecutor struct {
+	client *client.Client
+}
+
+func NewDockerExecutor() (*DockerExecutor, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv)
+	if err != nil {
+		return nil, err
+	}
+	return &DockerExecutor{client: cli}, nil
+}
+
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	// Perform syntax check
+	if err := e.syntaxCheck(code, language); err != nil {
+		return "", fmt.Errorf("syntax check failed: %v", err)
+	}
+
+	// Create a new Docker container
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"code." + getFileExtensionForLanguage(language)},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:     64 * 1024 * 1024, // 64MB
+			MemorySwap: 64 * 1024 * 1024, // 64MB (same as Memory to disable swap)
+			CPUQuota:   50000,            // 50% CPU
+		},
+		Binds: []string{
+			fmt.Sprintf("%s:/app/code.%s", createCodeFile(code, language), getFileExtensionForLanguage(language)),
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+	// Start the container
+	if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return "", fmt.Errorf("failed to start container: %v", err)
+	}
+
+	// Wait for the container to finish or timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	var exitCode int64
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return "", fmt.Errorf("failed to wait for container: %v", err)
+		}
+	case result := <-statusCh:
+		exitCode = result.StatusCode
+	case <-ctx.Done():
+		return "", fmt.Errorf("container execution timed out after %s", timeout)
+	}
+
+	// Check the container exit code and status
+	containerInfo, err := e.client.ContainerInspect(ctx, resp.ID)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect container: %v", err)
+	}
+
+	if containerInfo.State.OOMKilled {
+		return "", fmt.Errorf("container exceeded memory limit")
+	} else if exitCode != 0 {
+		return "", fmt.Errorf("container exited with non-zero status code: %d", exitCode)
+	}
+
+	// Retrieve the container logs
+	out, err := e.client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve container logs: %v", err)
+	}
+	defer out.Close()
+
+	// Read the logs and return the output
+	var stdout, stderr strings.Builder
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, out); err != nil {
+		return "", fmt.Errorf("failed to read container logs: %v", err)
+	}
+
+	if stderr.Len() > 0 {
+		return "", fmt.Errorf("execution error: %s", stderr.String())
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (e *DockerExecutor) syntaxCheck(code, language string) error {
+	// Implement syntax check logic based on the language
+	switch language {
+	case "python":
+		// Use a lightweight Python container to check the syntax
+		ctx := context.Background()
+		resp, err := e.client.ContainerCreate(ctx, &container.Config{
+			Image: "python:3.11-alpine",
+			Cmd:   []string{"python", "-c", "import ast; ast.parse('''" + code + "''')"},
+		}, nil, nil, nil, "")
+		if err != nil {
+			return err
+		}
+		defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+		if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+			return err
+		}
+
+		statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return err
+			}
+		case status := <-statusCh:
+			if status.StatusCode != 0 {
+				return fmt.Errorf("syntax check failed")
+			}
+		}
+	case "javascript":
+		ctx := context.Background()
+		codeFile := createCodeFile(code, language) // Ensure this function returns a valid path
+		defer os.Remove(codeFile)                  // Clean up after checking
+
+		// Make sure the container path is specified correctly
+		containerPath := "/app/" + filepath.Base(codeFile) // Use a specific folder instead of root
+
+		resp, err := e.client.ContainerCreate(ctx, &container.Config{
+			Image: "node:19-alpine",
+			Cmd:   []string{"node", "--check", containerPath},
+		}, &container.HostConfig{
+			Binds: []string{fmt.Sprintf("%s:%s", codeFile, containerPath)},
+		}, nil, nil, "")
+		if err != nil {
+			return err
+		}
+		defer e.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+
+		if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+			return err
+		}
+
+		statusCh, errCh := e.client.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return err
+			}
+		case status := <-statusCh:
+			if status.StatusCode != 0 {
+				// Retrieve logs to see the syntax error
+				out, logErr := e.client.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+				if logErr != nil {
+					return fmt.Errorf("syntax check failed with status code %d and unable to retrieve logs: %v", status.StatusCode, logErr)
+				}
+				defer out.Close()
+				var stderr strings.Builder
+				if _, err := stdcopy.StdCopy(nil, &stderr, out); err != nil {
+					return fmt.Errorf("failed to read container logs: %v", err)
+				}
+				return fmt.Errorf("syntax check failed: status code %d, error: %s", status.StatusCode, stderr.String())
+			}
+		}
+	default:
+		return fmt.Errorf("unsupported language: %s", language)
+	}
+	return nil
+}
+
+func createCodeFile(code, language string) string {
+	tempDir, err := os.MkdirTemp("", "code")
+	if err != nil {
+		log.Fatalf("Failed to create temporary directory: %v", err)
+	}
+
+	codeFile := filepath.Join(tempDir, "code."+getFileExtensionForLanguage(language))
+	err = os.WriteFile(codeFile, []byte(code), 0644)
+	if err != nil {
+		log.Fatalf("Failed to write code to file: %v", err)
+	}
+
+	return codeFile
+}
+
+func getImageForLanguage(language string) string {
+	switch language {
+	case "python":
+		return "python-exec"
+	case "javascript":
+		return "javascript-exec"
+	default:
+		return ""
+	}
+}
+
+func getRunCommandForLanguage(language, fileName string) string {
+	// Return the appropriate run command for the given language and file name
+	switch language {
+	case "python":
+		return fmt.Sprintf("python %s", fileName)
+	case "javascript":
+		return fmt.Sprintf("node %s", fileName)
+	default:
+		return ""
+	}
+}
+
+func getFileExtensionForLanguage(language string) string {
+	switch language {
+	case "python":
+		return "py"
+	case "javascript":
+		return "js"
+	default:
+		return ""
+	}
+}
+```
+
+**Assistant:**
+
+To improve the readability and maintainability of the `docker.go` file, let's refactor the code by extracting reusable functionality into separate methods and organizing the code structure. Here's the refactored version of `docker.go`:
+
+```go
+package executor
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
+)
+
+type DockerExecutor struct {
+	client *client.Client
+}
+
+func NewDockerExecutor() (*DockerExecutor, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv)
+	if err != nil {
+		return nil, err
+	}
+	return &DockerExecutor{client: cli}, nil
+}
+
+func (e *DockerExecutor) Execute(code, language string, timeout time.Duration) (string, error) {
+	if err := e.syntaxCheck(code, language); err != nil {
+		return "", fmt.Errorf("syntax check failed: %v", err)
+	}
+
+	containerID, err := e.createContainer(code, language)
+	if err != nil {
+		return "", fmt.Errorf("failed to create container: %v", err)
+	}
+	defer e.removeContainer(containerID)
+
+	if err := e.startContainer(containerID); err != nil {
+		return "", fmt.Errorf("failed to start container: %v", err)
+	}
+
+	exitCode, err := e.waitForContainer(containerID, timeout)
+	if err != nil {
+		return "", err
+	}
+
+	if err := e.checkContainerStatus(containerID, exitCode); err != nil {
+		return "", err
+	}
+
+	output, err := e.getContainerOutput(containerID)
+	if err != nil {
+		return "", err
+	}
+
+	return output, nil
+}
+
+func (e *DockerExecutor) syntaxCheck(code, language string) error {
+	// ...
+}
+
+func (e *DockerExecutor) createContainer(code, language string) (string, error) {
+	ctx := context.Background()
+	resp, err := e.client.ContainerCreate(ctx, &container.Config{
+		Image: getImageForLanguage(language),
+		Cmd:   []string{"code." + getFileExtensionForLanguage(language)},
+	}, &container.HostConfig{
+		Resources: container.Resources{
+			Memory:     64 * 1024 * 1024,
+			MemorySwap: 64 * 1024 * 1024,
+			CPUQuota:   50000,
+		},
+		Binds: []string{
+			fmt.Sprintf("%s:/app/code.%s", createCodeFile(code, language), getFileExtensionForLanguage(language)),
+		},
+	}, nil, nil, "")
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+func (e *DockerExecutor) startContainer(containerID string) error {
+	ctx := context.Background()
+	return e.client.ContainerStart(ctx, containerID, container.StartOptions{})
+}
+
+func (e *DockerExecutor) waitForContainer(containerID string, timeout time.Duration) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	statusCh, errCh := e.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return 0, fmt.Errorf("failed to wait for container: %v", err)
+		}
+	case result := <-statusCh:
+		return result.StatusCode, nil
+	case <-ctx.Done():
+		return 0, fmt.Errorf("container execution timed out after %s", timeout)
+	}
+	return 0, nil
+}
+
+func (e *DockerExecutor) checkContainerStatus(containerID string, exitCode int64) error {
+	ctx := context.Background()
+	containerInfo, err := e.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container: %v", err)
+	}
+
+	if containerInfo.State.OOMKilled {
+		return fmt.Errorf("container exceeded memory limit")
+	} else if exitCode != 0 {
+		return fmt.Errorf("container exited with non-zero status code: %d", exitCode)
+	}
+	return nil
+}
+
+func (e *DockerExecutor) getContainerOutput(containerID string) (string, error) {
+	ctx := context.Background()
+	out, err := e.client.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve container logs: %v", err)
+	}
+	defer out.Close()
+
+	var stdout, stderr strings.Builder
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, out); err != nil {
+		return "", fmt.Errorf("failed to read container logs: %v", err)
+	}
+
+	if stderr.Len() > 0 {
+		return "", fmt.Errorf("execution error: %s", stderr.String())
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (e *DockerExecutor) removeContainer(containerID string) {
+	ctx := context.Background()
+	e.client.ContainerRemove(ctx, containerID, container.RemoveOptions{})
+}
+
+func createCodeFile(code, language string) string {
+	// ...
+}
+
+func getImageForLanguage(language string) string {
+	// ...
+}
+
+func getRunCommandForLanguage(language, fileName string) string {
+	// ...
+}
+
+func getFileExtensionForLanguage(language string) string {
+	// ...
+}
+```
+
+In the refactored code:
+
+1. The `Execute` method has been simplified by extracting the container creation, starting, waiting, status checking, and output retrieval into separate methods. This improves readability and makes the code more modular.
+
+2. The `syntaxCheck` method remains the same as it is already a separate method.
+
+3. The `createContainer` method encapsulates the logic for creating a Docker container with the appropriate configuration.
+
+4. The `startContainer` method starts the container.
+
+5. The `waitForContainer` method waits for the container to finish executing or timeout.
+
+6. The `checkContainerStatus` method checks the container's exit code and status to determine if there were any errors or memory limit exceeded.
+
+7. The `getContainerOutput` method retrieves the container's logs and returns the output.
+
+8. The `removeContainer` method removes the container after execution.
+
+9. The helper functions `createCodeFile`, `getImageForLanguage`, `getRunCommandForLanguage`, and `getFileExtensionForLanguage` remain the same.
+
+This refactored code is more readable, maintainable, and modular. Each method has a clear purpose and encapsulates a specific functionality, making the code easier to understand and modify in the future.
+
+Please let me know if you have any further questions or if there's anything else you'd like to improve in the code.
+
+**User:**
+
+Thank you, all works perfect! Let's improve and the test file `executor_test.go`. Here is the content of the file:
+```go
+package tests
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/isavita/codeexec/internal/executor"
+)
+
+const timeout = 200 * time.Millisecond
+
+func TestDockerExecutor(t *testing.T) {
+	// Test case 1: Successful execution
+	t.Run("SuccessfulExecution", func(t *testing.T) {
+		code := "print('Hello, World!')"
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+
+		result, err := exec.Execute(code, language, timeout)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "Hello, World!"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Test case 2: Syntax error
+	t.Run("SyntaxError", func(t *testing.T) {
+		code := "print('Hello, World!"
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected a syntax error, but got nil")
+		}
+	})
+
+	// Test case 3: Print and return value
+	t.Run("PrintAndReturnValue", func(t *testing.T) {
+		code := `
+def add(a, b):
+	return a + b
+
+a = add(2, 3)
+print(a)
+a
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		result, err := exec.Execute(code, language, timeout)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "5"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Test case 4: Execution timeout
+	t.Run("ExecutionTimeout", func(t *testing.T) {
+		code := `
+import time
+
+print("Starting execution")
+time.sleep(5)
+print("Execution finished")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected an execution timeout error, but got nil")
+		} else if !strings.Contains(err.Error(), "container execution timed out") {
+			t.Errorf("Expected a timeout error, but got: %v", err)
+		}
+	})
+	// Test case 5: Exceed memory limit
+	t.Run("ExceedMemoryLimit", func(t *testing.T) {
+		code := `
+import numpy as np
+
+print("Allocating large array")
+large_array = np.zeros((10240000, 1024000, 1024000), dtype=np.int8)
+print("Allocation finished")
+`
+		language := "python"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+		_, err = exec.Execute(code, language, 10*timeout)
+		if err == nil {
+			t.Error("Expected a resource limitation error, but got nil")
+			// TODO: this check should be "container exceeded memory limit" instead of "container exited with non-zero status code: 1"
+		} else if !strings.Contains(err.Error(), "container exited with non-zero status code: 1") {
+			t.Errorf("Expected a resource limitation error, but got: %v", err)
+		}
+	})
+
+	// Test case for JavaScript execution
+	t.Run("JavaScriptExecution", func(t *testing.T) {
+		code := "console.log('Hello, JavaScript!');"
+		language := "javascript"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+
+		result, err := exec.Execute(code, language, timeout)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		expected := "Hello, JavaScript!"
+		if result != expected {
+			t.Errorf("Expected output: %s, but got: %s", expected, result)
+		}
+	})
+
+	// Add more test cases for different scenarios
+}
+
+func TestJavaScriptSyntaxCheck(t *testing.T) {
+	// Test case: JavaScript syntax error
+	t.Run("JavaScriptSyntaxError", func(t *testing.T) {
+		// Deliberately broken JavaScript code
+		code := "console.log('Hello, JavaScript!';" // Missing closing parenthesis
+		language := "javascript"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected a syntax error, but got nil")
+		} else if !strings.Contains(err.Error(), "syntax check failed") {
+			t.Errorf("Expected a syntax error, but got: %v", err)
+		}
+	})
+}
+```
