@@ -4478,4 +4478,597 @@ Let me know if you have any questions or if you'd like to continue with the next
 
 **User:**
 
+Thank you, all works perfect! Let's continue with building the api endpoint for code execution using the `http` package from the standard library. I would like to follow the TDD approach. Let's start by writing a failing test for the API endpoint. 
 
+**Assistant:**
+
+Great! Let's continue building the API endpoint for code execution using the `http` package and follow the TDD approach.
+
+First, let's create a new test file named `api_test.go` in the `tests` directory and add a failing test for the API endpoint.
+
+```go
+package tests
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/isavita/codeexec/cmd/api"
+)
+
+func TestCodeExecutionEndpoint(t *testing.T) {
+	// Create a new HTTP request with the code and language in the request body
+	body := map[string]string{
+		"code":     "print('Hello, World!')",
+		"language": "python",
+	}
+	requestBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Failed to marshal request body: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+
+	// Create a new HTTP response recorder
+	recorder := httptest.NewRecorder()
+
+	// Create a new API server
+	server := api.NewServer()
+
+	// Serve the HTTP request to the API server
+	server.ServeHTTP(recorder, req)
+
+	// Check the response status code
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+	}
+
+	// Check the response body
+	var response map[string]string
+	err = json.Unmarshal(recorder.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal response body: %v", err)
+	}
+
+	expectedOutput := "Hello, World!"
+	if response["output"] != expectedOutput {
+		t.Errorf("Expected output %q, but got %q", expectedOutput, response["output"])
+	}
+}
+```
+
+In this test:
+
+1. We create a new HTTP request with the code and language provided in the request body.
+2. We create a new HTTP response recorder to capture the response.
+3. We create a new instance of the API server using `api.NewServer()`.
+4. We serve the HTTP request to the API server using `server.ServeHTTP(recorder, req)`.
+5. We check the response status code to ensure it is `http.StatusOK`.
+6. We unmarshal the response body and check if the output matches the expected output.
+
+Now, let's run the test using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The test should fail because we haven't implemented the API endpoint yet.
+
+Next, let's implement the API endpoint in the `cmd/api/main.go` file to make the test pass.
+
+```go
+package main
+
+import (
+	"log"
+	"net/http"
+
+	"github.com/isavita/codeexec/internal/handler"
+)
+
+func main() {
+	// Create a new code execution handler
+	codeExecutionHandler := handler.NewCodeExecutionHandler()
+
+	// Create a new HTTP mux and register the code execution handler
+	mux := http.NewServeMux()
+	mux.Handle("/api/execute", codeExecutionHandler)
+
+	// Start the HTTP server
+	log.Println("Server listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+
+func NewServer() http.Handler {
+	// Create a new code execution handler
+	codeExecutionHandler := handler.NewCodeExecutionHandler()
+
+	// Create a new HTTP mux and register the code execution handler
+	mux := http.NewServeMux()
+	mux.Handle("/api/execute", codeExecutionHandler)
+
+	return mux
+}
+```
+
+In the `main.go` file:
+
+1. We create a new instance of the code execution handler using `handler.NewCodeExecutionHandler()`.
+2. We create a new HTTP mux using `http.NewServeMux()`.
+3. We register the code execution handler with the mux for the `/api/execute` endpoint.
+4. We start the HTTP server using `http.ListenAndServe()`.
+5. We also define a `NewServer` function that creates and configures the HTTP mux for testing purposes.
+
+Now, run the test again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The test should now pass, indicating that the API endpoint is working as expected.
+
+This is a basic implementation of the API endpoint for code execution using TDD. You can further enhance the API by adding middleware, error handling, authentication, and other features as needed.
+
+Let me know if you have any questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+Thank you! The code looks great, but when I run the test, I get the following error:
+```bash
+$> go test ./tests/api_test.go                                                                                  
+# command-line-arguments
+tests/api_test.go:10:2: import "github.com/isavita/codeexec/cmd/api" is a program, not an importable package
+FAIL    command-line-arguments [setup failed]
+FAIL
+```
+
+**Assistant:**
+
+I apologize for the confusion. The error occurs because we are trying to import the `main` package, which is not importable. Let's refactor the code to make it testable.
+
+First, let's create a new file named `server.go` in the `cmd/api` directory and move the server-related code from `main.go` to `server.go`.
+
+```go
+package api
+
+import (
+	"net/http"
+
+	"github.com/isavita/codeexec/internal/handler"
+)
+
+func NewServer() http.Handler {
+	// Create a new code execution handler
+	codeExecutionHandler := handler.NewCodeExecutionHandler()
+
+	// Create a new HTTP mux and register the code execution handler
+	mux := http.NewServeMux()
+	mux.Handle("/api/execute", codeExecutionHandler)
+
+	return mux
+}
+```
+
+In the `server.go` file:
+
+1. We define a `NewServer` function that creates and configures the HTTP mux.
+2. We create a new instance of the code execution handler using `handler.NewCodeExecutionHandler()`.
+3. We create a new HTTP mux using `http.NewServeMux()`.
+4. We register the code execution handler with the mux for the `/api/execute` endpoint.
+5. We return the configured HTTP mux.
+
+Now, update the `main.go` file to use the `NewServer` function from `server.go`.
+
+```go
+package main
+
+import (
+	"log"
+	"net/http"
+
+	"github.com/isavita/codeexec/cmd/api"
+)
+
+func main() {
+	// Create a new API server
+	server := api.NewServer()
+
+	// Start the HTTP server
+	log.Println("Server listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", server))
+}
+```
+
+In the updated `main.go` file:
+
+1. We import the `api` package.
+2. We create a new instance of the API server using `api.NewServer()`.
+3. We start the HTTP server using `http.ListenAndServe()`, passing the API server as the handler.
+
+Now, update the `api_test.go` file to import the `api` package instead of `cmd/api`.
+
+```go
+package tests
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/isavita/codeexec/cmd/api"
+)
+
+// ... (rest of the test code remains the same)
+```
+
+Now, run the test again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The test should now pass without any import-related errors.
+
+By separating the server-related code into a separate file and package, we can import and use it in our tests without running into the "program, not an importable package" error.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+I am still getting this error:
+```bash
+$> go test ./tests/api_test.go
+# command-line-arguments
+tests/api_test.go:10:2: import "github.com/isavita/codeexec/cmd/api" is a program, not an importable package
+FAIL    command-line-arguments [setup failed]
+FAIL
+```
+and this warning:
+```bash
+found packages main (main.go) and api (server.go) in /Users/isavita/git/codeexec/cmd/apigo list
+```
+
+**Assistant:**
+
+I apologize for the confusion. The issue is caused by having both `main` and `api` packages in the same directory. In Go, a directory can contain only one package (with the exception of `main` and `_test` packages).
+
+To resolve this issue, let's create a separate directory for the `api` package and move the `server.go` file into it.
+
+1. Create a new directory named `server` inside the `cmd/api` directory.
+2. Move the `server.go` file from `cmd/api` to `cmd/api/server`.
+3. Update the package declaration in `server.go` to `package server`.
+
+Here's the updated file structure:
+
+```bash
+.
+├── cmd
+│   └── api
+│       ├── main.go
+│       └── server
+│           └── server.go
+├── internal
+│   ├── executor
+│   ├── handler
+│   ├── middleware
+│   └── util
+├── pkg
+│   ├── config
+│   └── errors
+└── tests
+    └── api_test.go
+```
+
+Now, update the `main.go` file to import the `server` package:
+
+```go
+package main
+
+import (
+	"log"
+	"net/http"
+
+	"github.com/isavita/codeexec/cmd/api/server"
+)
+
+func main() {
+	// Create a new API server
+	srv := server.NewServer()
+
+	// Start the HTTP server
+	log.Println("Server listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", srv))
+}
+```
+
+Finally, update the `api_test.go` file to import the `server` package:
+
+```go
+package tests
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/isavita/codeexec/cmd/api/server"
+)
+
+// ... (rest of the test code remains the same)
+```
+
+Now, run the test again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The test should now pass without any import-related errors or warnings.
+
+By separating the `server` package into its own directory, we avoid the package conflict and make it an importable package.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+Thank you! This worked perfectly! Now let's add test for failure when executing the code from language that is not supported and another one for language that is not specified.
+
+**Assistant:**
+
+Great! Let's add two more test cases to cover the scenarios of executing code with an unsupported language and executing code without specifying a language.
+
+Update the `api_test.go` file to include the new test cases:
+
+```go
+package tests
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/isavita/codeexec/cmd/api/server"
+)
+
+func TestCodeExecutionEndpoint(t *testing.T) {
+	// ... (existing test case remains the same)
+
+	// Test case: Unsupported language
+	t.Run("UnsupportedLanguage", func(t *testing.T) {
+		body := map[string]string{
+			"code":     "println('Hello, World!')",
+			"language": "unsupported",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("Expected status code %d, but got %d", http.StatusBadRequest, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "unsupported language: unsupported"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
+
+	// Test case: Language not specified
+	t.Run("LanguageNotSpecified", func(t *testing.T) {
+		body := map[string]string{
+			"code": "println('Hello, World!')",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("Expected status code %d, but got %d", http.StatusBadRequest, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "language not specified"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
+}
+```
+
+In the `UnsupportedLanguage` test case:
+
+1. We create a request body with an unsupported language.
+2. We send a POST request to the `/api/execute` endpoint with the request body.
+3. We check the response status code to ensure it is `http.StatusBadRequest`.
+4. We unmarshal the response body and check if the error message matches the expected error.
+
+In the `LanguageNotSpecified` test case:
+
+1. We create a request body without specifying the language.
+2. We send a POST request to the `/api/execute` endpoint with the request body.
+3. We check the response status code to ensure it is `http.StatusBadRequest`.
+4. We unmarshal the response body and check if the error message matches the expected error.
+
+Now, run the tests using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The tests should fail because we haven't implemented the error handling logic in the API endpoint yet.
+
+To make the tests pass, update the `CodeExecutionHandler` in the `internal/handler/handler.go` file to handle the unsupported language and missing language cases:
+
+```go
+func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// ... (existing code remains the same)
+
+	code := body["code"]
+	language := body["language"]
+
+	if language == "" {
+		http.Error(w, "language not specified", http.StatusBadRequest)
+		return
+	}
+
+	if !isLanguageSupported(language) {
+		http.Error(w, "unsupported language: "+language, http.StatusBadRequest)
+		return
+	}
+
+	// ... (rest of the code remains the same)
+}
+
+func isLanguageSupported(language string) bool {
+	supportedLanguages := []string{"python", "javascript"}
+	for _, lang := range supportedLanguages {
+		if lang == language {
+			return true
+		}
+	}
+	return false
+}
+```
+
+In the updated `CodeExecutionHandler`:
+
+1. We check if the language is empty. If it is, we return a "language not specified" error with a status code of `http.StatusBadRequest`.
+2. We check if the language is supported by calling the `isLanguageSupported` function. If it is not supported, we return an "unsupported language" error with a status code of `http.StatusBadRequest`.
+3. We define an `isLanguageSupported` function that checks if the given language is in the list of supported languages.
+
+Now, run the tests again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The tests should now pass, indicating that the API endpoint correctly handles the unsupported language and missing language cases.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+I did all the changes, but I am getting the following test failures:
+```bash
+$> go test ./tests/api_test.go
+--- FAIL: TestCodeExecutionEndpoint (1.92s)
+    --- FAIL: TestCodeExecutionEndpoint/UnsupportedLanguage (0.00s)
+        api_test.go:86: Failed to unmarshal response body: invalid character 'u' looking for beginning of value
+    --- FAIL: TestCodeExecutionEndpoint/LanguageNotSpecified (0.00s)
+        api_test.go:123: Failed to unmarshal response body: invalid character 'l' looking for beginning of value
+FAIL
+FAIL	command-line-arguments	2.166s
+FAIL
+```
+
+**Assistant:**
+
+I apologize for the confusion. The issue is that the error messages returned by the API endpoint are not in JSON format, causing the `json.Unmarshal` to fail.
+
+Let's update the error handling in the `CodeExecutionHandler` to return the error messages in JSON format.
+
+Modify the `internal/handler/handler.go` file as follows:
+
+```go
+func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// ... (existing code remains the same)
+
+	code := body["code"]
+	language := body["language"]
+
+	if language == "" {
+		errorResponse(w, "language not specified", http.StatusBadRequest)
+		return
+	}
+
+	if !isLanguageSupported(language) {
+		errorResponse(w, "unsupported language: "+language, http.StatusBadRequest)
+		return
+	}
+
+	// ... (rest of the code remains the same)
+}
+
+func errorResponse(w http.ResponseWriter, message string, statusCode int) {
+	response := map[string]string{
+		"error": message,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(response)
+}
+```
+
+In the updated `CodeExecutionHandler`:
+
+1. We replace the `http.Error` calls with `errorResponse` calls to return the error messages in JSON format.
+2. We define an `errorResponse` function that takes the error message, status code, and the `http.ResponseWriter` as parameters. It creates a JSON response with the error message and writes it to the response writer with the specified status code.
+
+Now, run the tests again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The tests should now pass without any unmarshaling errors.
+
+Here's the expected output:
+
+```bash
+PASS
+ok      command-line-arguments  1.234s
+```
+
+By returning the error messages in JSON format, we ensure that the response body can be properly unmarshaled by the test cases.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**

@@ -36,6 +36,16 @@ func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	code := body["code"]
 	language := body["language"]
 
+	if language == "" {
+		errorResponse(w, "language not specified", http.StatusBadRequest)
+		return
+	}
+
+	if !isLanguageSupported(language) {
+		errorResponse(w, "unsupported language: "+language, http.StatusBadRequest)
+		return
+	}
+
 	output, err := h.executor.Execute(code, language, 5*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -47,5 +57,25 @@ func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func isLanguageSupported(language string) bool {
+	supportedLanguages := []string{"python", "javascript"}
+	for _, lang := range supportedLanguages {
+		if lang == language {
+			return true
+		}
+	}
+	return false
+}
+
+func errorResponse(w http.ResponseWriter, message string, statusCode int) {
+	response := map[string]string{
+		"error": message,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(response)
 }
