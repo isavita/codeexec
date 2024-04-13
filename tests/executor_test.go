@@ -134,3 +134,23 @@ print("Allocation finished")
 
 	// Add more test cases for different scenarios
 }
+
+func TestJavaScriptSyntaxCheck(t *testing.T) {
+	// Test case: JavaScript syntax error
+	t.Run("JavaScriptSyntaxError", func(t *testing.T) {
+		// Deliberately broken JavaScript code
+		code := "console.log('Hello, JavaScript!';" // Missing closing parenthesis
+		language := "javascript"
+		exec, err := executor.NewDockerExecutor()
+		if err != nil {
+			t.Fatalf("Failed to create Docker executor: %v", err)
+		}
+
+		_, err = exec.Execute(code, language, timeout)
+		if err == nil {
+			t.Error("Expected a syntax error, but got nil")
+		} else if !strings.Contains(err.Error(), "syntax check failed") {
+			t.Errorf("Expected a syntax error, but got: %v", err)
+		}
+	})
+}

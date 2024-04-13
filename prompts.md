@@ -3468,3 +3468,54 @@ If it still fails, check the logs for any runtime errors in the JavaScript code 
 **User:**
 
 I followed your instructions and now the test is passing. Thank you for your help!
+Let's add a new test for syntax check for javascript and then I will continue working on the project.
+
+**Assistant:**
+
+Great to hear that the test is now passing! Let’s add a specific test to ensure the syntax checking mechanism for JavaScript is functioning correctly. This will help catch syntax errors before attempting to execute any JavaScript code within the Docker containers.
+
+### Adding a Syntax Check Test for JavaScript
+
+We'll add a test case in your existing `executor_test.go` file that specifically tests the syntax check functionality for JavaScript. This test will provide a JavaScript snippet with a deliberate syntax error to ensure that your syntax check setup correctly identifies and reports the error.
+
+Here's how you can structure this new test:
+
+```go
+func TestJavaScriptSyntaxCheck(t *testing.T) {
+    // Test case: JavaScript syntax error
+    t.Run("JavaScriptSyntaxError", func(t *testing.T) {
+        // Deliberately broken JavaScript code
+        code := "console.log('Hello, JavaScript!';"  // Missing closing parenthesis
+        language := "javascript"
+        exec, err := executor.NewDockerExecutor()
+        if err != nil {
+            t.Fatalf("Failed to create Docker executor: %v", err)
+        }
+
+        _, err = exec.Execute(code, language, timeout)
+        if err == nil {
+            t.Error("Expected a syntax error, but got nil")
+        } else if !strings.Contains(err.Error(), "syntax check failed") {
+            t.Errorf("Expected a syntax error, but got: %v", err)
+        }
+    })
+}
+```
+
+### Explanation:
+
+1. **Broken Code**: The JavaScript code provided is intentionally broken (`console.log('Hello, JavaScript!';`). The missing closing parenthesis after the string should trigger a syntax error.
+
+2. **Executor Creation**: As before, a new Docker executor is created.
+
+3. **Execution**: The code is sent for execution. Since the code contains a syntax error, the `Execute` method should invoke the `syntaxCheck` function, which should fail.
+
+4. **Error Handling**: The test checks if an error was returned and whether it specifically mentions a syntax check failure. This confirms that the syntax error is being caught as expected.
+
+### Running the Test
+
+Make sure your test framework is set up to run this new test along with the others. This will help ensure that your syntax checking for JavaScript is robust and correctly integrated.
+
+Once you’ve added this test, run your test suite to verify that the syntax check for JavaScript correctly identifies syntax errors. This will solidify the reliability of your testing framework as you continue to add more features or support for additional programming languages.
+
+**User:**
