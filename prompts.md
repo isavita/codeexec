@@ -5230,4 +5230,407 @@ Let me know if you have any further questions or if you'd like to continue with 
 
 **User:**
 
+Thank you! Everything works perfectly! Let's continue with adding simple authentication to the API uses an API key for authentication. When making requests to the endpoint, you need to include an X-Api-Key header with your API key unless you want to get a 401 Unauthorized response. I also want to disable the API key check if running in a local host mode. Probably by using an environment variable. Let's start by writing a failing test for the authentication when enabled.
 
+**Assistant:**
+
+Sure! Let's add authentication to the API using an API key and write a failing test for it. We'll also include a way to disable the API key check when running in localhost mode using an environment variable.
+
+First, let's update the `api_test.go` file to include a test case for authentication failure:
+
+```go
+func TestCodeExecutionEndpoint(t *testing.T) {
+	// ... (existing test cases remain the same)
+
+	// Test case: Authentication failure
+	t.Run("AuthenticationFailure", func(t *testing.T) {
+		body := map[string]string{
+			"code":     "print('Hello, World!')",
+			"language": "python",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		// Set the API key check enabled
+		os.Setenv("API_KEY_CHECK_ENABLED", "true")
+		defer os.Unsetenv("API_KEY_CHECK_ENABLED")
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("Expected status code %d, but got %d", http.StatusUnauthorized, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "unauthorized"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
+}
+```
+
+In the `AuthenticationFailure` test case:
+
+1. We create a request body with valid code and language.
+2. We send a POST request to the `/api/execute` endpoint with the request body, but without including the `X-Api-Key` header.
+3. We set the `API_KEY_CHECK_ENABLED` environment variable to `"true"` to enable the API key check.
+4. We check the response status code to ensure it is `http.StatusUnauthorized`.
+5. We unmarshal the response body and check if the error message matches the expected error.
+
+Now, run the tests using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The `AuthenticationFailure` test case should fail because we haven't implemented the authentication logic yet.
+
+To make the test pass, let's create a new file named `middleware.go` in the `cmd/api/server` directory and add the authentication middleware:
+
+```go
+package server
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+)
+
+func AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("API_KEY_CHECK_ENABLED") == "true" {
+			apiKey := r.Header.Get("X-Api-Key")
+			if apiKey != "your-api-key" {
+				errorResponse(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func errorResponse(w http.ResponseWriter, message string, statusCode int) {
+	response := map[string]string{
+		"error": message,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(response)
+}
+```
+
+In the `AuthMiddleware`:
+
+1. We check if the `API_KEY_CHECK_ENABLED` environment variable is set to `"true"`. If it is, we proceed with the API key check.
+2. We retrieve the `X-Api-Key` header from the request.
+3. If the API key doesn't match the expected value (`"your-api-key"`), we return an "unauthorized" error with a status code of `http.StatusUnauthorized`.
+4. If the API key is valid or the API key check is disabled, we call the `next` handler to proceed with the request.
+
+Update the `NewServer` function in the `server.go` file to include the authentication middleware:
+
+```go
+func NewServer() http.Handler {
+	codeExecutionHandler := handler.NewCodeExecutionHandler()
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/execute", AuthMiddleware(codeExecutionHandler))
+
+	return mux
+}
+```
+
+Now, run the tests again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The `AuthenticationFailure` test case should now pass, indicating that the API endpoint correctly handles authentication failure when the API key check is enabled.
+
+You can test the API endpoint with the API key check disabled by setting the `API_KEY_CHECK_ENABLED` environment variable to `"false"` or not setting it at all.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+Thank you! This worked. Now let's add test for the case when the write token is provided and the API key check is enabled. The API should return a 200 OK status code and the output of the code execution. I also want to add test in which the API key check is disabled and the API should return a 200 OK status code and the output of the code execution even if the API key is not provided. The API KEY should be provided as an environment variable.
+
+**Assistant:**
+
+Certainly! Let's add two more test cases: one for successful authentication when the API key check is enabled and another for successful execution when the API key check is disabled.
+
+First, update the `api_test.go` file to include the new test cases:
+
+```go
+func TestCodeExecutionEndpoint(t *testing.T) {
+	// ... (existing test cases remain the same)
+
+	// Test case: Successful authentication
+	t.Run("SuccessfulAuthentication", func(t *testing.T) {
+		body := map[string]string{
+			"code":     "print('Hello, World!')",
+			"language": "python",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		// Set the API key check enabled and provide the correct API key
+		os.Setenv("API_KEY_CHECK_ENABLED", "true")
+		os.Setenv("API_KEY", "your-api-key")
+		defer os.Unsetenv("API_KEY_CHECK_ENABLED")
+		defer os.Unsetenv("API_KEY")
+
+		req.Header.Set("X-Api-Key", "your-api-key")
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusOK {
+			t.Errorf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedOutput := "Hello, World!"
+		if response["output"] != expectedOutput {
+			t.Errorf("Expected output %q, but got %q", expectedOutput, response["output"])
+		}
+	})
+
+	// Test case: API key check disabled
+	t.Run("ApiKeyCheckDisabled", func(t *testing.T) {
+		body := map[string]string{
+			"code":     "print('Hello, World!')",
+			"language": "python",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		// Set the API key check disabled
+		os.Setenv("API_KEY_CHECK_ENABLED", "false")
+		defer os.Unsetenv("API_KEY_CHECK_ENABLED")
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusOK {
+			t.Errorf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedOutput := "Hello, World!"
+		if response["output"] != expectedOutput {
+			t.Errorf("Expected output %q, but got %q", expectedOutput, response["output"])
+		}
+	})
+}
+```
+
+In the `SuccessfulAuthentication` test case:
+
+1. We create a request body with valid code and language.
+2. We set the `API_KEY_CHECK_ENABLED` environment variable to `"true"` and provide the correct API key in the `API_KEY` environment variable.
+3. We include the `X-Api-Key` header in the request with the correct API key value.
+4. We check the response status code to ensure it is `http.StatusOK`.
+5. We unmarshal the response body and check if the output matches the expected output.
+
+In the `ApiKeyCheckDisabled` test case:
+
+1. We create a request body with valid code and language.
+2. We set the `API_KEY_CHECK_ENABLED` environment variable to `"false"` to disable the API key check.
+3. We send the request without including the `X-Api-Key` header.
+4. We check the response status code to ensure it is `http.StatusOK`.
+5. We unmarshal the response body and check if the output matches the expected output.
+
+Now, update the `AuthMiddleware` in the `middleware.go` file to use the `API_KEY` environment variable:
+
+```go
+func AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("API_KEY_CHECK_ENABLED") == "true" {
+			apiKey := r.Header.Get("X-Api-Key")
+			if apiKey != os.Getenv("API_KEY") {
+				errorResponse(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+```
+
+In the updated `AuthMiddleware`, we retrieve the expected API key value from the `API_KEY` environment variable and compare it with the provided `X-Api-Key` header value.
+
+Now, run the tests using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+All the test cases should pass, indicating that the API endpoint correctly handles successful authentication when the API key check is enabled and allows execution when the API key check is disabled.
+
+Remember to set the `API_KEY` environment variable to the correct value when running the server in production.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+Thank you, but one of the test is faling with the following error:
+```bash
+--- FAIL: TestCodeExecutionEndpoint (2.09s)
+    --- FAIL: TestCodeExecutionEndpoint/AuthenticationFailure (0.49s)
+        api_test.go:234: Expected status code 401, but got 200
+        api_test.go:245: Expected error "unauthorized", but got ""
+FAIL
+FAIL    command-line-arguments  2.324s
+FAIL
+```
+I think it is because the API key is not set. Can you help me with that?
+
+**Assistant:**
+
+I apologize for the confusion. You're correct. The `AuthenticationFailure` test case is failing because the `API_KEY` environment variable is not set, causing the authentication middleware to allow the request even without a valid API key.
+
+To fix this, let's update the `AuthMiddleware` in the `middleware.go` file to check if the `API_KEY` environment variable is set:
+
+```go
+func AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("API_KEY_CHECK_ENABLED") == "true" {
+			apiKey := r.Header.Get("X-Api-Key")
+			expectedApiKey := os.Getenv("API_KEY")
+			if expectedApiKey == "" {
+				errorResponse(w, "API key not set", http.StatusInternalServerError)
+				return
+			}
+			if apiKey != expectedApiKey {
+				errorResponse(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+```
+
+In the updated `AuthMiddleware`:
+
+1. We retrieve the expected API key value from the `API_KEY` environment variable.
+2. We check if the `API_KEY` environment variable is set. If it's not set (empty string), we return an "API key not set" error with a status code of `http.StatusInternalServerError`.
+3. We compare the provided `X-Api-Key` header value with the expected API key value. If they don't match, we return an "unauthorized" error with a status code of `http.StatusUnauthorized`.
+
+Now, update the `AuthenticationFailure` test case in the `api_test.go` file to set the `API_KEY` environment variable:
+
+```go
+// Test case: Authentication failure
+t.Run("AuthenticationFailure", func(t *testing.T) {
+	body := map[string]string{
+		"code":     "print('Hello, World!')",
+		"language": "python",
+	}
+	requestBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Failed to marshal request body: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+
+	srv := server.NewServer()
+
+	// Set the API key check enabled and provide an incorrect API key
+	os.Setenv("API_KEY_CHECK_ENABLED", "true")
+	os.Setenv("API_KEY", "your-api-key")
+	defer os.Unsetenv("API_KEY_CHECK_ENABLED")
+	defer os.Unsetenv("API_KEY")
+
+	req.Header.Set("X-Api-Key", "incorrect-api-key")
+
+	srv.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status code %d, but got %d", http.StatusUnauthorized, recorder.Code)
+	}
+
+	var response map[string]string
+	err = json.Unmarshal(recorder.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal response body: %v", err)
+	}
+
+	expectedError := "unauthorized"
+	if response["error"] != expectedError {
+		t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+	}
+})
+```
+
+In the updated `AuthenticationFailure` test case:
+
+1. We set the `API_KEY_CHECK_ENABLED` environment variable to `"true"` and provide the correct API key in the `API_KEY` environment variable.
+2. We include the `X-Api-Key` header in the request with an incorrect API key value.
+3. We check the response status code to ensure it is `http.StatusUnauthorized`.
+4. We unmarshal the response body and check if the error message matches the expected error.
+
+Now, run the tests using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+All the test cases should now pass, including the `AuthenticationFailure` test case.
+
+Remember to set the `API_KEY` environment variable to the correct value when running the server in production.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
