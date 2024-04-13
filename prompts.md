@@ -4118,3 +4118,364 @@ func TestJavaScriptSyntaxCheck(t *testing.T) {
 	})
 }
 ```
+
+**Assistant:**
+
+The test file `executor_test.go` looks good and covers various scenarios. However, there are a few improvements we can make to enhance the readability and maintainability of the tests. Here's the refactored version of `executor_test.go`:
+
+```go
+package tests
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/isavita/codeexec/internal/executor"
+)
+
+const (
+	timeout         = 200 * time.Millisecond
+	extendedTimeout = 10 * timeout
+)
+
+func TestDockerExecutor(t *testing.T) {
+	testCases := []struct {
+		name     string
+		code     string
+		language string
+		expected string
+		err      string
+		timeout  time.Duration
+	}{
+		{
+			name:     "SuccessfulExecution",
+			code:     "print('Hello, World!')",
+			language: "python",
+			expected: "Hello, World!",
+			timeout:  timeout,
+		},
+		{
+			name:     "SyntaxError",
+			code:     "print('Hello, World!",
+			language: "python",
+			err:      "syntax check failed",
+			timeout:  timeout,
+		},
+		{
+			name: "PrintAndReturnValue",
+			code: `
+def add(a, b):
+	return a + b
+
+a = add(2, 3)
+print(a)
+a
+`,
+			language: "python",
+			expected: "5",
+			timeout:  timeout,
+		},
+		{
+			name: "ExecutionTimeout",
+			code: `
+import time
+
+print("Starting execution")
+time.sleep(5)
+print("Execution finished")
+`,
+			language: "python",
+			err:      "container execution timed out",
+			timeout:  timeout,
+		},
+		{
+			name: "ExceedMemoryLimit",
+			code: `
+import numpy as np
+
+print("Allocating large array")
+large_array = np.zeros((10240000, 1024000, 1024000), dtype=np.int8)
+print("Allocation finished")
+`,
+			language: "python",
+			err:      "container exceeded memory limit",
+			timeout:  extendedTimeout,
+		},
+		{
+			name:     "JavaScriptExecution",
+			code:     "console.log('Hello, JavaScript!');",
+			language: "javascript",
+			expected: "Hello, JavaScript!",
+			timeout:  timeout,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			exec, err := executor.NewDockerExecutor()
+			if err != nil {
+				t.Fatalf("Failed to create Docker executor: %v", err)
+			}
+
+			result, err := exec.Execute(tc.code, tc.language, tc.timeout)
+			if tc.err != "" {
+				if err == nil {
+					t.Errorf("Expected an error containing '%s', but got nil", tc.err)
+				} else if !strings.Contains(err.Error(), tc.err) {
+					t.Errorf("Expected an error containing '%s', but got: %v", tc.err, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if result != tc.expected {
+					t.Errorf("Expected output: %s, but got: %s", tc.expected, result)
+				}
+			}
+		})
+	}
+}
+
+func TestJavaScriptSyntaxCheck(t *testing.T) {
+	testCases := []struct {
+		name     string
+		code     string
+		language string
+		err      string
+	}{
+		{
+			name:     "JavaScriptSyntaxError",
+			code:     "console.log('Hello, JavaScript!';",
+			language: "javascript",
+			err:      "syntax check failed",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			exec, err := executor.NewDockerExecutor()
+			if err != nil {
+				t.Fatalf("Failed to create Docker executor: %v", err)
+			}
+
+			_, err = exec.Execute(tc.code, tc.language, timeout)
+			if err == nil {
+				t.Errorf("Expected an error containing '%s', but got nil", tc.err)
+			} else if !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("Expected an error containing '%s', but got: %v", tc.err, err)
+			}
+		})
+	}
+}
+```
+
+Here are the main changes made to the test file:
+
+1. Defined constants `timeout` and `extendedTimeout` for better readability and maintainability.
+
+2. Organized the test cases into a slice of structs called `testCases`. Each test case includes the test name, code, language, expected output, expected error (if any), and timeout duration.
+
+3. Used a loop to iterate over the `testCases` slice and run each test case using `t.Run()`. This makes the test code more concise and easier to read.
+
+4. Simplified the error checking logic by comparing the expected error substring with the actual error message using `strings.Contains()`.
+
+5. Moved the JavaScript syntax error test case to a separate test function `TestJavaScriptSyntaxCheck` for better organization.
+
+6. Updated the `ExceedMemoryLimit` test case to expect the error message "container exceeded memory limit" instead of "container exited with non-zero status code: 1". This aligns with the expected behavior based on the refactored `docker.go` code.
+
+These changes make the test code more readable, maintainable, and easier to extend with new test cases. The use of test case structs and loops reduces code duplication and improves the overall structure of the tests.
+
+Please let me know if you have any further questions or if there's anything else you'd like to improve in the test code.
+
+**User:**
+
+I need to return the "container exited with non-zero status code: 1"​ for the "ExceedMemoryLimit" test case.
+With this change everything works perfect! Thank you for your help!
+Let's continue with working on the part with the web server in TDD manner.
+Simply to be on the same page, here is the file structure:
+```bash
+$> ls -R
+Dockerfile         cmd                dockerfiles        go.sum             internal           prompts.md
+README.md          docker-compose.yml go.mod             hello.js           pkg                tests
+./cmd:
+api
+./cmd/api:
+main.go
+./dockerfiles:
+Dockerfile.javascript Dockerfile.python
+./internal:
+executor   handler    middleware util
+./internal/executor:
+docker.go    executor.go  languages.go
+./internal/handler:
+handler.go
+./internal/middleware:
+middleware.go
+./internal/util:
+util.go
+./pkg:
+config errors
+./pkg/config:
+config.go
+./pkg/errors:
+errors.go
+./tests:
+executor_test.go
+```
+Let's add a new test for the `handler.go` file. The test should check if the handler returns the correct response for a given request. The handler should execute the code provided in the request body and return the output as the response.
+
+**Assistant:**
+
+Certainly! Let's create a new test for the `handler.go` file using the Test-Driven Development (TDD) approach. We'll write the test first and then implement the handler functionality to make the test pass.
+
+Create a new file named `handler_test.go` in the `tests` directory with the following content:
+
+```go
+package tests
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/isavita/codeexec/internal/handler"
+)
+
+func TestCodeExecutionHandler(t *testing.T) {
+	// Create a new HTTP request with the code and language in the request body
+	body := map[string]string{
+		"code":     "print('Hello, World!')",
+		"language": "python",
+	}
+	requestBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Failed to marshal request body: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", "/execute", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+
+	// Create a new HTTP response recorder
+	recorder := httptest.NewRecorder()
+
+	// Create a new code execution handler
+	h := handler.NewCodeExecutionHandler()
+
+	// Serve the HTTP request to the handler
+	h.ServeHTTP(recorder, req)
+
+	// Check the response status code
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+	}
+
+	// Check the response body
+	var response map[string]string
+	err = json.Unmarshal(recorder.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal response body: %v", err)
+	}
+
+	expectedOutput := "Hello, World!"
+	if response["output"] != expectedOutput {
+		t.Errorf("Expected output %q, but got %q", expectedOutput, response["output"])
+	}
+}
+```
+
+In this test:
+
+1. We create a new HTTP request with the code and language provided in the request body.
+2. We create a new HTTP response recorder to capture the response.
+3. We create a new instance of the code execution handler using `handler.NewCodeExecutionHandler()`.
+4. We serve the HTTP request to the handler using `h.ServeHTTP(recorder, req)`.
+5. We check the response status code to ensure it is `http.StatusOK`.
+6. We unmarshal the response body and check if the output matches the expected output.
+
+Now, let's implement the code execution handler in the `internal/handler/handler.go` file:
+
+```go
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/isavita/codeexec/internal/executor"
+)
+
+type CodeExecutionHandler struct {
+	executor *executor.DockerExecutor
+}
+
+func NewCodeExecutionHandler() *CodeExecutionHandler {
+	exec, err := executor.NewDockerExecutor()
+	if err != nil {
+		panic(err)
+	}
+	return &CodeExecutionHandler{executor: exec}
+}
+
+func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body map[string]string
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	code := body["code"]
+	language := body["language"]
+
+	output, err := h.executor.Execute(code, language, 5*time.Second)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]string{
+		"output": output,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+```
+
+In the code execution handler:
+
+1. We define a `CodeExecutionHandler` struct that holds an instance of the `DockerExecutor`.
+2. We implement the `NewCodeExecutionHandler` function to create a new instance of the handler.
+3. We implement the `ServeHTTP` method to handle the incoming HTTP requests.
+4. We check if the request method is POST. If not, we return a "Method not allowed" error.
+5. We decode the request body to get the code and language.
+6. We execute the code using the `DockerExecutor` with a timeout of 5 seconds.
+7. If the execution is successful, we create a response with the output.
+8. We set the response content type to `application/json` and encode the response.
+
+Now, run the test using the following command:
+
+```bash
+go test ./tests/handler_test.go
+```
+
+The test should pass, indicating that the code execution handler is working as expected.
+
+This is a basic implementation of the code execution handler using TDD. You can further enhance the handler by adding error handling, input validation, and other features as needed.
+
+Let me know if you have any questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+
