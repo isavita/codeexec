@@ -46,9 +46,18 @@ func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if code == "" {
+		errorResponse(w, "code not provided", http.StatusBadRequest)
+		return
+	}
+
 	output, err := h.executor.Execute(code, language, 5*time.Second)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		response := map[string]string{
+			"error": err.Error(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
 		return
 	}
 

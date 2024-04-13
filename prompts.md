@@ -5072,3 +5072,162 @@ By returning the error messages in JSON format, we ensure that the response body
 Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
 
 **User:**
+
+Let's continue with adding tests for when no code is provided. It should return an error message indicating that the code is missing. Also, let's add another test for not working code this should return success status code but with an error message in the response body.
+
+**Assistant:**
+
+Certainly! Let's add two more test cases: one for when no code is provided and another for executing code that doesn't work.
+
+Update the `api_test.go` file to include the new test cases:
+
+```go
+func TestCodeExecutionEndpoint(t *testing.T) {
+	// ... (existing test cases remain the same)
+
+	// Test case: Code not provided
+	t.Run("CodeNotProvided", func(t *testing.T) {
+		body := map[string]string{
+			"language": "python",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("Expected status code %d, but got %d", http.StatusBadRequest, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "code not provided"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
+
+	// Test case: Not working code
+	t.Run("NotWorkingCode", func(t *testing.T) {
+		body := map[string]string{
+			"code":     "print('Hello, World!)",
+			"language": "python",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusOK {
+			t.Errorf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		if response["error"] == "" {
+			t.Error("Expected an error message, but got none")
+		}
+	})
+}
+```
+
+In the `CodeNotProvided` test case:
+
+1. We create a request body without providing the code.
+2. We send a POST request to the `/api/execute` endpoint with the request body.
+3. We check the response status code to ensure it is `http.StatusBadRequest`.
+4. We unmarshal the response body and check if the error message matches the expected error.
+
+In the `NotWorkingCode` test case:
+
+1. We create a request body with code that doesn't work (missing closing quote).
+2. We send a POST request to the `/api/execute` endpoint with the request body.
+3. We check the response status code to ensure it is `http.StatusOK`.
+4. We unmarshal the response body and check if an error message is present.
+
+Now, run the tests using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The tests should fail because we haven't implemented the error handling logic for missing code and the logic to return error messages for not working code.
+
+To make the tests pass, update the `CodeExecutionHandler` in the `internal/handler/handler.go` file:
+
+```go
+func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// ... (existing code remains the same)
+
+	code := body["code"]
+	language := body["language"]
+
+	if code == "" {
+		errorResponse(w, "code not provided", http.StatusBadRequest)
+		return
+	}
+
+	// ... (existing code remains the same)
+
+	output, err := h.executor.Execute(code, language, 5*time.Second)
+	if err != nil {
+		response := map[string]string{
+			"error": err.Error(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// ... (rest of the code remains the same)
+}
+```
+
+In the updated `CodeExecutionHandler`:
+
+1. We check if the code is empty. If it is, we return a "code not provided" error with a status code of `http.StatusBadRequest`.
+2. If the execution of the code results in an error, we return a response with the error message in JSON format.
+
+Now, run the tests again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The tests should now pass, indicating that the API endpoint correctly handles the missing code case and returns error messages for not working code.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+

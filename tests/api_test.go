@@ -128,4 +128,78 @@ func TestCodeExecutionEndpoint(t *testing.T) {
 			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
 		}
 	})
+
+	// Test case: Code not provided
+	t.Run("CodeNotProvided", func(t *testing.T) {
+		body := map[string]string{
+			"language": "python",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("Expected status code %d, but got %d", http.StatusBadRequest, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "code not provided"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
+
+	// Test case: Not working code
+	t.Run("NotWorkingCode", func(t *testing.T) {
+		body := map[string]string{
+			"code":     "print('Hello, World!)",
+			"language": "python",
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Failed to marshal request body: %v", err)
+		}
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusOK {
+			t.Errorf("Expected status code %d, but got %d", http.StatusOK, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		if response["error"] == "" {
+			t.Error("Expected an error message, but got none")
+		}
+	})
 }
