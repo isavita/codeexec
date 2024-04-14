@@ -19,7 +19,7 @@ This is a Go-based API that allows you to execute code in various programming la
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/code-execution-api.git
+git clone https://github.com/isavita/codeexec.git
 ```
 
 2. Build the Docker images:
