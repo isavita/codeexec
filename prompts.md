@@ -5634,3 +5634,185 @@ All the test cases should now pass, including the `AuthenticationFailure` test c
 Remember to set the `API_KEY` environment variable to the correct value when running the server in production.
 
 Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+Thank you! All works perfectly! Now let's add a test for some broken POST request that has invalid JSON in the request body. The API should return a 400 Bad Request status code and an error message indicating that the request body is invalid.
+
+**Assistant:**
+
+Certainly! Let's add a test case for a POST request with an invalid JSON payload in the request body. The API should handle this scenario and return a 400 Bad Request status code along with an error message indicating that the request body is invalid.
+
+Update the `api_test.go` file to include the new test case:
+
+```go
+func TestCodeExecutionEndpoint(t *testing.T) {
+	// ... (existing test cases remain the same)
+
+	// Test case: Invalid JSON payload
+	t.Run("InvalidJSONPayload", func(t *testing.T) {
+		requestBody := []byte(`{"code": "print('Hello, World!')", "language": "python",}`) // Invalid JSON payload
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("Expected status code %d, but got %d", http.StatusBadRequest, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "invalid request body"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
+}
+```
+
+In the `InvalidJSONPayload` test case:
+
+1. We create an invalid JSON payload by adding an extra comma after the `"language"` field.
+2. We send a POST request to the `/api/execute` endpoint with the invalid JSON payload in the request body.
+3. We check the response status code to ensure it is `http.StatusBadRequest`.
+4. We unmarshal the response body and check if the error message matches the expected error.
+
+Now, run the tests using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The `InvalidJSONPayload` test case should fail because the API currently doesn't handle invalid JSON payloads.
+
+To make the test pass, update the `CodeExecutionHandler` in the `internal/handler/handler.go` file to handle invalid JSON payloads:
+
+```go
+func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// ... (existing code remains the same)
+
+	var body map[string]string
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		errorResponse(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// ... (rest of the code remains the same)
+}
+```
+
+In the updated `CodeExecutionHandler`:
+
+1. We use `json.NewDecoder(r.Body).Decode(&body)` to decode the request body into the `body` map.
+2. If there is an error during the JSON decoding, we return an "invalid request body" error with a status code of `http.StatusBadRequest`.
+
+Now, run the tests again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+All the test cases should now pass, including the `InvalidJSONPayload` test case, indicating that the API correctly handles requests with invalid JSON payloads.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.
+
+**User:**
+
+Thank you! This worked perfectly! Now add a test for using the wrong HTTP method (e.g., GET instead of POST) when calling the API endpoint. The API should return a 405 Method Not Allowed status code and an error message indicating that the method is not allowed.
+
+**Assistant:**
+
+Sure! Let's add a test case for using the wrong HTTP method when calling the API endpoint. The API should return a 405 Method Not Allowed status code and an error message indicating that the method is not allowed.
+
+Update the `api_test.go` file to include the new test case:
+
+```go
+func TestCodeExecutionEndpoint(t *testing.T) {
+	// ... (existing test cases remain the same)
+
+	// Test case: Wrong HTTP method
+	t.Run("WrongHTTPMethod", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "/api/execute", nil)
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Errorf("Expected status code %d, but got %d", http.StatusMethodNotAllowed, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "method not allowed"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
+}
+```
+
+In the `WrongHTTPMethod` test case:
+
+1. We create a new HTTP request with the `GET` method instead of `POST`.
+2. We send the request to the `/api/execute` endpoint.
+3. We check the response status code to ensure it is `http.StatusMethodNotAllowed`.
+4. We unmarshal the response body and check if the error message matches the expected error.
+
+Now, run the tests using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+The `WrongHTTPMethod` test case should fail because the API currently doesn't handle requests with the wrong HTTP method.
+
+To make the test pass, update the `CodeExecutionHandler` in the `internal/handler/handler.go` file to handle requests with the wrong HTTP method:
+
+```go
+func (h *CodeExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// ... (rest of the code remains the same)
+}
+```
+
+In the updated `CodeExecutionHandler`:
+
+1. We check if the HTTP method of the request is not `POST` using `r.Method != http.MethodPost`.
+2. If the method is not `POST`, we return a "method not allowed" error with a status code of `http.StatusMethodNotAllowed`.
+
+Now, run the tests again using the following command:
+
+```bash
+go test ./tests/api_test.go
+```
+
+All the test cases should now pass, including the `WrongHTTPMethod` test case, indicating that the API correctly handles requests with the wrong HTTP method.
+
+Let me know if you have any further questions or if you'd like to continue with the next steps in building the web server.

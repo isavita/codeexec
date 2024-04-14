@@ -338,4 +338,62 @@ func TestCodeExecutionEndpoint(t *testing.T) {
 			t.Errorf("Expected output %q, but got %q", expectedOutput, response["output"])
 		}
 	})
+	// Test case: Invalid JSON payload
+	t.Run("InvalidJSONPayload", func(t *testing.T) {
+		requestBody := []byte(`{"code": "print('Hello, World!')", "language": "python",}`) // Invalid JSON payload
+
+		req, err := http.NewRequest("POST", "/api/execute", bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("Expected status code %d, but got %d", http.StatusBadRequest, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "invalid request body"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
+	// Test case: Wrong HTTP method
+	t.Run("WrongHTTPMethod", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "/api/execute", nil)
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+
+		srv := server.NewServer()
+
+		srv.ServeHTTP(recorder, req)
+
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Errorf("Expected status code %d, but got %d", http.StatusMethodNotAllowed, recorder.Code)
+		}
+
+		var response map[string]string
+		err = json.Unmarshal(recorder.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal response body: %v", err)
+		}
+
+		expectedError := "method not allowed"
+		if response["error"] != expectedError {
+			t.Errorf("Expected error %q, but got %q", expectedError, response["error"])
+		}
+	})
 }
