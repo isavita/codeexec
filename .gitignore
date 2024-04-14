@@ -69,7 +69,6 @@ Godeps/
 
 # Binary executables
 /main
-/cmd
 *.exe
 *.test
 
