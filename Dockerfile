@@ -25,8 +25,11 @@ WORKDIR /root/
 # Copy the compiled binary from the build stage
 COPY --from=build /app/main .
 
+# Set the default value for the PORT environment variable
+ENV PORT=8080
+
 # Expose the port on which the server will run
-EXPOSE 8080
+EXPOSE ${PORT}
 
 # Run the application
 CMD ["./main"]

@@ -6104,3 +6104,305 @@ On the production server, you can build the Docker images using the same `build.
 Let me know if you have any further questions or if you encounter any issues.
 
 **User:**
+
+Thank you! This works perfectly! Now could we make the PORT on which the applications runs configurable and if not set to default to 8080.
+Here is the current `main.go` file:
+```go
+package main
+
+import (
+	"log"
+	"net/http"
+
+	"github.com/isavita/codeexec/cmd/api/server"
+)
+
+func main() {
+	// Create a new API server
+	srv := server.NewServer()
+
+	// Start the HTTP server
+	log.Println("Server listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", srv))
+}
+```
+
+**Assistant:**
+
+Certainly! We can make the port on which the application runs configurable by reading it from an environment variable and defaulting to 8080 if the environment variable is not set.
+
+Here's the updated `main.go` file:
+
+```go
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/isavita/codeexec/cmd/api/server"
+)
+
+func main() {
+	// Get the port from the environment variable or default to 8080
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	// Create a new API server
+	srv := server.NewServer()
+
+	// Start the HTTP server
+	log.Printf("Server listening on :%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, srv))
+}
+```
+
+In the updated `main.go` file:
+
+1. We import the `os` package to access environment variables.
+2. We retrieve the value of the `PORT` environment variable using `os.Getenv("PORT")`.
+3. If the `PORT` environment variable is not set (i.e., an empty string), we default to `"8080"`.
+4. We use the `port` variable in the `http.ListenAndServe` function to specify the port on which the server should listen.
+5. We updated the log message to include the `port` variable.
+
+Now, you can set the `PORT` environment variable when running the application to specify the desired port. If the `PORT` environment variable is not set, the application will default to running on port 8080.
+
+To set the `PORT` environment variable when running the application locally, you can use the following command:
+
+```bash
+PORT=8000 go run ./cmd/api
+```
+
+This command sets the `PORT` environment variable to `8000` and runs the application.
+
+When running the application using Docker, you can set the `PORT` environment variable in the `docker run` command:
+
+```bash
+docker run -p 8000:8000 -e PORT=8000 codeexec
+```
+
+This command sets the `PORT` environment variable to `8000` and maps port 8000 from the container to port 8000 on your local machine.
+
+On the production server, you can set the `PORT` environment variable using the appropriate method provided by your deployment platform or container orchestration system.
+
+By making the port configurable through an environment variable, you provide flexibility in deploying your application on different environments or platforms.
+
+Let me know if you have any further questions!
+
+**User:**
+
+Thank you! Could you add and the default logic if not set as part of the Dockerfile as well?
+
+**Assistant:**
+
+Certainly! We can set the default value for the `PORT` environment variable in the Dockerfile using the `ENV` instruction. If the `PORT` environment variable is not set when running the container, it will default to the value specified in the Dockerfile.
+
+Here's the updated Dockerfile:
+
+```dockerfile
+# Build stage
+FROM golang:1.17 AS build
+
+WORKDIR /app
+
+# Copy go.mod and go.sum files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy the rest of the application code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd/api
+
+# Final stage
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+
+# Copy the compiled binary from the build stage
+COPY --from=build /app/main .
+
+# Set the default value for the PORT environment variable
+ENV PORT=8080
+
+# Expose the port on which the server will run
+EXPOSE ${PORT}
+
+# Run the application
+CMD ["./main"]
+```
+
+In the updated Dockerfile:
+
+1. We added the `ENV PORT=8080` instruction to set the default value for the `PORT` environment variable to `8080`. This means that if the `PORT` environment variable is not set when running the container, it will default to `8080`.
+2. We updated the `EXPOSE` instruction to use the value of the `PORT` environment variable using `EXPOSE ${PORT}`. This exposes the port specified by the `PORT` environment variable.
+
+Now, when running the container, if you don't specify the `PORT` environment variable, it will default to `8080`. You can still override the default value by setting the `PORT` environment variable when running the container.
+
+For example, to run the container with the default port (`8080`), you can use the following command:
+
+```bash
+docker run -p 8080:8080 codeexec
+```
+
+To run the container with a custom port (`8000`), you can use the following command:
+
+```bash
+docker run -p 8000:8000 -e PORT=8000 codeexec
+```
+
+This way, you have the flexibility to set the port using the `PORT` environment variable, and if not set, it will default to the value specified in the Dockerfile.
+
+Let me know if you have any further questions!
+
+**User:**
+
+Now could you give me nice README.md file for the project and how to run the project locally with docker plus some test example with curl how to make request to the API endpoint and evaluate Python and Javascript code. I would like you to add and information for the API authentication with the API key and how to enable/disable it.
+Make sure you don't miss to add the information for the PORT environment variable and other important information. Try to structure the README.md file in a nice and readable way with headings and bullet points including code snippets with curl requests. I would like the README.md to be detailed and inromative but still concise and easy to follow without too much details.
+
+**Assistant:**
+
+# Code Execution API
+
+This is a Go-based API that allows you to execute code in various programming languages, including Python and JavaScript. The API provides a simple endpoint for code submission and returns the output of the executed code.
+
+## Features
+
+- Execute code in multiple programming languages
+- Containerized execution environment for security and isolation
+- API authentication using an API key
+- Configurable port for running the API server
+- Detailed error messages and execution output
+
+## Prerequisites
+
+- Docker: Make sure you have Docker installed on your machine. You can download it from the official Docker website: https://www.docker.com/get-started
+
+## Getting Started
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/yourusername/code-execution-api.git
+```
+
+2. Build the Docker images:
+
+```bash
+./build.sh
+```
+
+3. Run the API server:
+
+```bash
+docker run -p 8080:8080 codeexec
+```
+
+The API server will start running on `http://localhost:8080`.
+
+## Configuration
+
+### Port
+
+By default, the API server runs on port `8080`. You can change the port by setting the `PORT` environment variable when running the container:
+
+```bash
+docker run -p 8000:8000 -e PORT=8000 codeexec
+```
+
+### API Authentication
+
+The API uses an API key for authentication. When making requests to the API endpoint, include the `X-Api-Key` header with your API key.
+
+To enable API authentication, set the `API_KEY_CHECK_ENABLED` environment variable to `"true"` and provide your API key using the `API_KEY` environment variable when running the container:
+
+```bash
+docker run -p 8080:8080 -e API_KEY_CHECK_ENABLED=true -e API_KEY=your-api-key codeexec
+```
+
+To disable API authentication, set the `API_KEY_CHECK_ENABLED` environment variable to `"false"` or omit it entirely.
+
+## API Endpoint
+
+### Execute Code
+
+- URL: `/api/execute`
+- Method: `POST`
+- Headers:
+  - `Content-Type: application/json`
+  - `X-Api-Key: your-api-key` (if API authentication is enabled)
+- Request Body:
+  ```json
+  {
+    "code": "your-code-here",
+    "language": "python"
+  }
+  ```
+
+## Examples
+
+### Execute Python Code
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{
+  "code": "print(\"Hello, World!\")",
+  "language": "python"
+}' http://localhost:8080/api/execute
+```
+
+Response:
+```json
+{
+  "output": "Hello, World!"
+}
+```
+
+### Execute JavaScript Code
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{
+  "code": "console.log(\"Hello, World!\");",
+  "language": "javascript"
+}' http://localhost:8080/api/execute
+```
+
+Response:
+```json
+{
+  "output": "Hello, World!"
+}
+```
+
+### Authentication Error
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{
+  "code": "print(\"Hello, World!\")",
+  "language": "python"
+}' http://localhost:8080/api/execute
+```
+
+Response:
+```json
+{
+  "error": "unauthorized"
+}
+```
+
+## Contributing
+
+Contributions are welcome! If you find any issues or have suggestions for improvements, please open an issue or submit a pull request.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+
